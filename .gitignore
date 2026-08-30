@@ -1,0 +1,11 @@
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# taskmon：构建产物不入库（源码保留）
+taskmon/dist/
+
+# AI 会话产物不入库
+.zcode/
