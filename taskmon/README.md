@@ -11,8 +11,9 @@ Windows 任务管理器·内存版：控制台实时查看进程内存占用，�
 
 ```bash
 pnpm install
-pnpm dev            # 开发运行（tsx 直跑）
+pnpm dev            # 开发运行（tsx 直跑，--version 显示 dev）
 pnpm build && pnpm start
+pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与打包」
 ```
 
 ## 参数
@@ -32,11 +33,56 @@ pnpm build && pnpm start
 - `空格 / r`：立即刷新
 - `q / Ctrl+C`：退出
 
+## 版本与打包（exe）
+
+本次改造的目的：**消除双处维护版本号的漂移**（此前 `package.json` 与 `src/main.ts` 各写一份、已经漂移），并把"哪份源码构建出哪个 exe"的关系固化下来。
+
+### 原则
+
+- **版本号唯一来源是 `package.json` 的 `version`**：打包时由 `bun --define process.env.TASKMON_VERSION=<version>` 编译期内联注入，程序内 `--version` 显示该值；`pnpm dev` 直跑时显示 `dev`。不要在 `src/` 里手写版本号。
+- **exe 是构建产物，不入 git**（根 `.gitignore` 已有 `*.exe`）：版本追溯靠「产物文件名 + git tag」。
+
+### 打包
+
+```bash
+pnpm exe
+# 等价于：bun scripts/build-exe.ts
+# 底层执行：bun build --compile --define "process.env.TASKMON_VERSION=<version>" \
+#           --outfile release/taskmon-v<version>.exe src/main.ts
+```
+
+产出 `release/taskmon-v<version>.exe`（单文件免安装，约 85MB，需安装 [Bun](https://bun.sh)），并打印体积与 sha256。
+
+验证版本：`./release/taskmon-v0.2.0.exe --version`
+
+### 发版（打 tag）
+
+```bash
+# 1. 改 taskmon/package.json 的 version（如 0.2.1）
+# 2. 提交
+git add taskmon && git commit -m "chore(taskmon): release v0.2.1"
+# 3. 打 tag（monorepo 多项目共用仓库，统一带 taskmon/ 前缀防撞名）
+git tag -a taskmon/v0.2.1 -m "taskmon v0.2.1"
+# 4. 构建该版本 exe
+pnpm exe
+```
+
+tag 常用命令（在仓库根目录执行）：
+
+```bash
+git tag -l "taskmon/*"        # 列出 taskmon 全部版本
+git show taskmon/v0.2.0       # 查看某 tag 指向的提交与说明
+git checkout taskmon/v0.2.0   # 检出该版本源码（进入 detached HEAD，看完 git switch master 回来）
+git tag -d taskmon/v0.2.0     # 删除本地 tag（打错时）
+```
+
+以后若仓库加了远程，`git push origin taskmon/v0.2.1` 推送 tag，或用 Releases 把 exe 挂到 tag 上分发。
+
 ## 二期规划（已选型：Bun）
 
 二期目标：产出两个 exe —— **CLI 控制台版** + **GUI 图形版**，打包方案选定 **Bun**。
 
-- CLI exe：`bun build --compile src/main.ts --outfile taskmon.exe`，单文件免安装，约 90MB
+- CLI exe：已落地（v0.2.0 起），由 `pnpm exe` 封装，见「版本与打包（exe）」
 - 建议结构：重构为 `src/core`（tasklist 解析 + 分组排序）+ `src/cli` + `src/gui`，两个入口共享 core
 - 落选备选：Node SEA（官方、~80MB，但步骤多且不支持 ESM 入口）；Electron portable（GUI 逻辑复用最省、~100MB）；Tauri v2（体积最小 5-10MB，但需移植 Rust 或捆绑 sidecar）
 

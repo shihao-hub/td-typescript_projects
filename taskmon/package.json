@@ -1,6 +1,6 @@
 {
   "name": "taskmon",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Windows 任务管理器·内存版：按进程名分组展示内存占用，控制台实时刷新",
   "type": "module",
   "engines": {
@@ -11,7 +11,8 @@
     "build": "tsc",
     "start": "node dist/main.js",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "exe": "bun scripts/build-exe.ts"
   },
   "bin": {
     "taskmon": "dist/main.js"

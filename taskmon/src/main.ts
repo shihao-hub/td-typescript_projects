@@ -18,7 +18,7 @@ program
   .option('-t, --top <n>', '只显示内存最大的前 n 组（0 = 全部）', (v) => Math.max(0, Math.floor(Number(v) || 0)), 0)
   .option('-e, --expand', '展开全部分组（默认全部折叠，交互中可用 Enter/a 控制）')
   .option('--once', '输出一帧快照后退出（调试 / 管道友好）')
-  .version('0.2.0');
+  .version(process.env.TASKMON_VERSION ?? 'dev');
 program.parse();
 
 const opts = program.opts<{ interval: number; top: number; expand: boolean; once: boolean }>();
