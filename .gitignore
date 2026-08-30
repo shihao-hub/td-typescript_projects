@@ -10,4 +10,3 @@ taskmon/dist/
 *.exe
 
 # AI 会话产物不入库
-.zcode/
