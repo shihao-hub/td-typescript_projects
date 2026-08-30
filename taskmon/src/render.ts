@@ -9,6 +9,18 @@ export interface RenderOptions {
   timestamp: Date;
   intervalSec: number;
   totalProcs: number;
+  /** 已展开的组名集合（多实例组默认折叠） */
+  expanded?: ReadonlySet<string>;
+  /** 无视 expanded 集合，直接展开全部 */
+  expandAll?: boolean;
+  /** 光标所在组序号（top 过滤后的可见组列表内），用于高亮该组行 */
+  cursorIndex?: number;
+}
+
+export interface Frame {
+  lines: string[];
+  /** 每个可见组的"组行"在 lines 中的行号（与可见组一一对应） */
+  groupRows: number[];
 }
 
 type Tier = 'red' | 'yellow' | 'green';
@@ -29,12 +41,15 @@ const PID_W = 6;
 const MEM_W = 10;
 const PCT_W = 7;
 const GAP = '  ';
+/** 展开指示符占位（▸ / ▾ + 空格） */
+const IND_W = 2;
 
-/** 渲染整帧（纯函数）：返回逐行文本，不含滚动视口逻辑 */
-export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): string[] {
+/** 渲染整帧（纯函数）：默认仅展示分组行，展开的组追加成员行 */
+export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Frame {
   const width = Math.max(72, Math.min(300, opts.width));
   const groups = opts.top > 0 ? allGroups.slice(0, opts.top) : allGroups;
   const lines: string[] = [];
+  const groupRows: number[] = [];
 
   const totalMem = allGroups.reduce((s, g) => s + g.totalBytes, 0);
   const maxTotal = groups[0]?.totalBytes ?? 0;
@@ -61,7 +76,7 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): str
 
   if (groups.length === 0) {
     lines.push(chalk.yellow('未捕获到任何进程'));
-    return lines;
+    return { lines, groupRows };
   }
 
   // 列宽计算
@@ -69,12 +84,13 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): str
     18,
     Math.min(40, ...groups.map((g) => displayWidth(g.name) + (g.processes.length > 1 ? ` (${g.processes.length})`.length : 0))),
   );
-  const barW = Math.max(8, Math.min(40, width - (RANK_W + PID_W + MEM_W + PCT_W + GAP.length * 5 + nameW)));
+  const nameColW = nameW + IND_W;
+  const barW = Math.max(8, Math.min(40, width - (RANK_W + PID_W + MEM_W + PCT_W + GAP.length * 5 + nameColW)));
 
   // 列头
   lines.push(
     chalk.bold(
-      padStart('#', RANK_W) + GAP + padEnd('进程 / 组', nameW) + GAP + padStart('PID', PID_W) + GAP +
+      padStart('#', RANK_W) + GAP + padEnd('  进程 / 组', nameColW) + GAP + padStart('PID', PID_W) + GAP +
         padStart('内存', MEM_W) + GAP + padStart('组内%', PCT_W) + GAP + padEnd('分布', barW),
     ),
   );
@@ -82,31 +98,35 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): str
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i]!;
     const multi = g.processes.length > 1;
+    const isOpen = opts.expandAll === true || opts.expanded?.has(g.name) === true;
     const tier = memTier(g.totalBytes);
     const label = multi ? `${g.name} (${g.processes.length})` : g.name;
-    const nameCell = padEnd(truncate(label, nameW), nameW);
+    const ind = multi ? (isOpen ? '▾ ' : '▸ ') : '  ';
+    const nameCell = padEnd(ind + truncate(label, nameW), nameColW);
 
-    // 组行：排名 + 名称(×N) + [单例时 PID] + 总内存 + 条形图
+    // 组行：排名 + 名称(×N + 展开指示) + [单例时 PID] + 总内存 + 条形图
     const ratio = maxTotal > 0 ? g.totalBytes / maxTotal : 0;
     const filled = Math.round(Math.max(0, Math.min(1, ratio)) * barW);
     const barCell =
       (filled > 0 ? chalk[tier]('█'.repeat(filled)) : '') + chalk.dim('░'.repeat(Math.max(0, barW - filled)));
 
-    lines.push(
+    let row =
       chalk.dim(padStart(String(i + 1), RANK_W)) + GAP +
-        (multi ? chalk.bold(nameCell) : nameCell) + GAP +
-        (multi ? ' '.repeat(PID_W) : chalk.dim(padStart(String(g.processes[0]!.pid), PID_W))) + GAP +
-        chalk.bold(chalk[tier](padStart(formatBytes(g.totalBytes), MEM_W))) + GAP +
-        ' '.repeat(PCT_W) + GAP +
-        barCell,
-    );
+      (multi ? chalk.bold(nameCell) : nameCell) + GAP +
+      (multi ? ' '.repeat(PID_W) : chalk.dim(padStart(String(g.processes[0]!.pid), PID_W))) + GAP +
+      chalk.bold(chalk[tier](padStart(formatBytes(g.totalBytes), MEM_W))) + GAP +
+      ' '.repeat(PCT_W) + GAP +
+      barCell;
+    if (opts.cursorIndex === i) row = chalk.inverse(row);
+    lines.push(row);
+    groupRows.push(lines.length - 1);
 
-    // 组内成员行：PID + 单进程内存 + 组内占比
-    if (multi) {
+    // 组内成员行（仅展开时）：PID + 单进程内存 + 组内占比
+    if (multi && isOpen) {
       for (const p of g.processes) {
         const pct = g.totalBytes > 0 ? (p.memBytes / g.totalBytes) * 100 : 0;
         lines.push(
-          ' '.repeat(RANK_W) + GAP + ' '.repeat(nameW) + GAP +
+          ' '.repeat(RANK_W) + GAP + ' '.repeat(nameColW) + GAP +
             chalk.dim(padStart(String(p.pid), PID_W)) + GAP +
             padStart(formatBytes(p.memBytes), MEM_W) + GAP +
             chalk.dim(padStart(`${pct.toFixed(1)}%`, PCT_W)),
@@ -117,5 +137,5 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): str
     if (i < groups.length - 1) lines.push('');
   }
 
-  return lines;
+  return { lines, groupRows };
 }
