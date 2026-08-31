@@ -70,36 +70,43 @@ taskmon 的 exe 由 `bun build --compile` 打成单文件，只内嵌构建时�
 
 ### 原则
 
-- **版本号唯一来源是 `package.json` 的 `version`**：打包时由 `bun --define process.env.TASKMON_VERSION=<version>` 编译期内联注入，程序内 `--version` 显示该值；`pnpm dev` 直跑时显示 `dev`。不要在 `src/` 里手写版本号。
+- **默认模式版本来源是 `package.json` 的 `version`；`--tag` / `--release` 模式下 git tag（`taskmon/v*`）是唯一版本来源**，`package.json` 无需再手动维护。无论哪种模式，版本号都由 `bun --define process.env.TASKMON_VERSION=<version>` 编译期内联注入，程序内 `--version` 显示该值；`pnpm dev` 直跑时显示 `dev`。不要在 `src/` 里手写版本号。
 - **exe 是构建产物，不入 git**（根 `.gitignore` 已有 `*.exe`）：版本追溯靠「产物文件名 + git tag」。
 
-### 打包
+### 打包（三种模式）
 
 ```bash
-# 将当前项目的补丁版本号（Patch）自增 1，但只修改 package.json 文件，不自动创建 Git commit 和 Git tag。
-# ./scripts/build-exe.ts 不需要修改
-# pnpm version patch --no-git-tag-version
-pnpm exe
-# 等价于：bun scripts/build-exe.ts
+pnpm exe                    # 默认：版本取 package.json 的 version
+pnpm exe --tag              # 版本取 git tag（taskmon/v*），自动带可排序后缀
+pnpm exe --release          # 发版一条龙（等价 --release=patch），见下节
+pnpm exe --release=minor    # minor / major 同理
 # 底层执行：bun build --compile --define "process.env.TASKMON_VERSION=<version>" \
 #           --outfile release/taskmon-v<version>.exe src/main.ts
 ```
 
-产出 `release/taskmon-v<version>.exe`（单文件免安装，约 85MB，需安装 [Bun](https://bun.sh)），并打印体积与 sha256。
+三种模式都产出 `release/taskmon-v<version>.exe`（单文件免安装，约 85MB，需安装 [Bun](https://bun.sh)），并打印体积与 sha256。验证版本：`./release/taskmon-v0.2.0.exe --version`。
 
-验证版本：`./release/taskmon-v0.2.0.exe --version`
+`--tag` 模式的版本号规则——后缀距 tag 的提交数**零填充 4 位，字典序 = 构建先后**，按文件名排序即可区分新旧：
 
-### 发版（打 tag）
+| git 状态 | 版本号示例 |
+|---|---|
+| 正好在 tag 上、树干净 | `0.2.0` |
+| 领先 tag N 个提交 | `0.2.0+0002.gff02b24`（N=2，g 后是该提交短哈希） |
+| 工作树有未提交/未跟踪文件 | 上述基础上再追加 `.dirty` |
+
+### 发版（一条命令）
 
 ```bash
-# 1. 改 taskmon/package.json 的 version（如 0.2.1）
-# 2. 提交
-git add taskmon && git commit -m "chore(taskmon): release v0.2.1"
-# 3. 打 tag（monorepo 多项目共用仓库，统一带 taskmon/ 前缀防撞名）
-git tag -a taskmon/v0.2.1 -m "taskmon v0.2.1"
-# 4. 构建该版本 exe
-pnpm exe
+pnpm exe --release          # patch 自增；minor / major 用 --release=minor / --release=major
 ```
+
+脚本依次完成（任一步失败即中止）：
+
+1. 校验工作树必须干净（exe 内嵌的是**工作区**源码，脏树打 tag 会导致 tag 与产物对不上），不干净直接报错退出；
+2. 基于最新可达的 `taskmon/v*` tag 自增一级（无历史 tag 时以 `package.json` 为基底）；目标 tag 已存在则报错；
+3. 打 annotated tag（monorepo 多项目共用仓库，统一带 `taskmon/` 前缀防撞名）；
+4. 推送 tag 到第一个 git 远程：未配置远程则提示跳过，失败仅警告（可手动 `git push origin taskmon/vX.Y.Z`）；
+5. 按 `--tag` 模式构建，此时正好在 tag 上且干净，产物即无后缀的正式版本。
 
 tag 常用命令（在仓库根目录执行）：
 
@@ -107,10 +114,8 @@ tag 常用命令（在仓库根目录执行）：
 git tag -l "taskmon/*"        # 列出 taskmon 全部版本
 git show taskmon/v0.2.0       # 查看某 tag 指向的提交与说明
 git checkout taskmon/v0.2.0   # 检出该版本源码（进入 detached HEAD，看完 git switch master 回来）
-git tag -d taskmon/v0.2.0     # 删除本地 tag（打错时）
+git tag -d taskmon/v0.2.0     # 删除本地 tag（打错时；已推送的话还要 git push origin :refs/tags/taskmon/v0.2.0）
 ```
-
-以后若仓库加了远程，`git push origin taskmon/v0.2.1` 推送 tag，或用 Releases 把 exe 挂到 tag 上分发。
 
 ## 二期规划（已选型：Bun）
 
