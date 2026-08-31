@@ -9,6 +9,7 @@ import { groupProcesses } from './grouping.js';
 import { readSysMem } from './sysmem.js';
 import { renderFrame } from './render.js';
 import type { Frame } from './render.js';
+import { allLines } from './render.js';
 import { formatBytes, truncate } from './format.js';
 import { guardKill, killPids } from './kill.js';
 import type { ProcessGroup } from './types.js';
@@ -100,7 +101,8 @@ async function tick(): Promise<void> {
 function currentFrame(): Frame {
   if (error) {
     return {
-      lines: [
+      header: [],
+      body: [
         chalk.red.bold('采集进程数据失败'),
         '',
         chalk.red(error),
@@ -122,8 +124,10 @@ function currentFrame(): Frame {
   });
 }
 
+/** body 可视行数：终端行数 - 固定表头 - 底部状态行 */
 function bodyRows(): number {
-  return Math.max(4, (stdout.rows ?? 40) - 1);
+  const headerCount = lastFrame?.header.length ?? 4;
+  return Math.max(4, (stdout.rows ?? 40) - headerCount - 1);
 }
 
 /** 底部状态行：kill 确认/执行/结果与护栏通知优先于按键提示 */
@@ -230,12 +234,11 @@ async function executeKill(): Promise<void> {
 function draw(): void {
   const frame = currentFrame();
   lastFrame = frame;
-  const lines = frame.lines;
   const width = stdout.columns ?? 100;
   const body = bodyRows();
-  const maxOffset = Math.max(0, lines.length - body);
+  const maxOffset = Math.max(0, frame.body.length - body);
 
-  // 光标合法性 + 视口跟随（保证光标行可见）
+  // 光标合法性 + 视口跟随（保证光标行可见；行号均为 body 相对行号）
   if (frame.groupRows.length > 0) {
     cursor = Math.max(0, Math.min(cursor, frame.groupRows.length - 1));
     const cursorRow = frame.groupRows[cursor]!;
@@ -244,8 +247,10 @@ function draw(): void {
   }
   offset = Math.max(0, Math.min(offset, maxOffset));
 
-  const rows = lines.slice(offset, offset + body);
-  while (rows.length < body) rows.push('');
+  // 固定区（header）不参与滚动，滚动区（body）按 offset 切片
+  const rows = [...frame.header, ...frame.body.slice(offset, offset + body)];
+  const fullRows = (stdout.rows ?? 40) - 1;
+  while (rows.length < fullRows) rows.push('');
 
   const parts: string[] = [];
   if (offset > 0) parts.push(`↑ 上方还有 ${offset} 行`);
@@ -418,7 +423,7 @@ async function main(): Promise<void> {
         sysMem: readSysMem(),
         expandAll: opts.expand,
       });
-      console.log(frame.lines.join('\n'));
+      console.log(allLines(frame).join('\n'));
       process.exit(0);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
