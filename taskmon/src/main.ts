@@ -9,7 +9,8 @@ import { groupProcesses } from './grouping.js';
 import { readSysMem } from './sysmem.js';
 import { renderFrame } from './render.js';
 import type { Frame } from './render.js';
-import { truncate } from './format.js';
+import { formatBytes, truncate } from './format.js';
+import { guardKill, killPids } from './kill.js';
 import type { ProcessGroup } from './types.js';
 
 const program = new Command();
@@ -41,6 +42,19 @@ let lastFrame: Frame | undefined;
 /** 已展开的组名集合（默认空 = 全部折叠） */
 const expandedNames = new Set<string>();
 let expandInitialized = false;
+
+/** kill 交互状态机：normal（无）→ confirm → running → result */
+type KillState =
+  | { phase: 'confirm'; name: string; pids: number[]; memBytes: number }
+  | { phase: 'running'; name: string; pids: number[]; progress?: string }
+  | { phase: 'result'; text: string };
+let killState: KillState | undefined;
+
+/** 底部通知（护栏拒绝等提示），到期自动消失 */
+let notice: { text: string; timer: NodeJS.Timeout } | undefined;
+let resultTimer: NodeJS.Timeout | undefined;
+/** confirm 态冻结自动刷新：防止确认期间列表变动导致 PID 快照与界面错位 */
+let frozen = false;
 
 /** top 过滤后的可见组列表（与光标序号对应） */
 function shownGroups(): ProcessGroup[] {
@@ -76,7 +90,7 @@ async function tick(): Promise<void> {
     }
   }
   draw();
-  if (running) {
+  if (running && !frozen) {
     timer = setTimeout(() => {
       void tick();
     }, opts.interval * 1000);
@@ -112,6 +126,107 @@ function bodyRows(): number {
   return Math.max(4, (stdout.rows ?? 40) - 1);
 }
 
+/** 底部状态行：kill 确认/执行/结果与护栏通知优先于按键提示 */
+function statusLine(hint: string, width: number): string {
+  if (killState) {
+    if (killState.phase === 'confirm') {
+      return chalk.bgYellow.black(
+        truncate(` 结束 ${killState.pids.length} 个 ${killState.name} 进程（共 ${formatBytes(killState.memBytes)}）？ y 确认 / n 取消 `, width - 2),
+      );
+    }
+    if (killState.phase === 'running') {
+      return chalk.yellow(truncate(` ${killState.progress ?? `正在结束 ${killState.name} 进程...`}`, width - 2));
+    }
+    return truncate(` ${killState.text}`, width - 2);
+  }
+  if (notice) return truncate(` ${notice.text}`, width - 2);
+  return hint;
+}
+
+/** 短通知（如护栏拒绝），数秒后自动消失 */
+function showNotice(text: string): void {
+  if (notice) clearTimeout(notice.timer);
+  notice = {
+    text,
+    timer: setTimeout(() => {
+      notice = undefined;
+      draw();
+    }, 3_000),
+  };
+  draw();
+}
+
+function startKillConfirm(): void {
+  const g = shownGroups()[cursor];
+  if (!g) return;
+  const guard = guardKill(g, process.pid);
+  if (!guard.ok) {
+    showNotice(chalk.red(guard.reason ?? '禁止结束'));
+    return;
+  }
+  // 冻结自动刷新，防止确认期间列表刷新导致快照与界面错位
+  if (timer) clearTimeout(timer);
+  frozen = true;
+  killState = {
+    phase: 'confirm',
+    name: g.name,
+    pids: g.processes.map((p) => p.pid),
+    memBytes: g.totalBytes,
+  };
+  draw();
+}
+
+function cancelKill(): void {
+  killState = undefined;
+  frozen = false;
+  refreshNow();
+}
+
+function scheduleResultClear(): void {
+  if (resultTimer) clearTimeout(resultTimer);
+  resultTimer = setTimeout(() => {
+    if (killState?.phase === 'result') {
+      killState = undefined;
+      draw();
+    }
+  }, 6_000);
+}
+
+function clearKillState(): void {
+  if (resultTimer) {
+    clearTimeout(resultTimer);
+    resultTimer = undefined;
+  }
+  killState = undefined;
+}
+
+async function executeKill(): Promise<void> {
+  const st = killState;
+  if (!st || st.phase !== 'confirm') return;
+  killState = { phase: 'running', name: st.name, pids: st.pids };
+  draw();
+  const results = await killPids(st.pids, undefined, (p) => {
+    if (killState?.phase === 'running') {
+      killState.progress = `正在结束 ${st.name} 进程 (${p.i}/${p.total}) · PID ${p.pid}`;
+      draw();
+    }
+  });
+  const killed = results.filter((r) => r.outcome === 'killed').length;
+  const gone = results.filter((r) => r.outcome === 'gone').length;
+  const failed = results.filter((r) => r.outcome === 'failed');
+  const parts = [`已结束 ${chalk.green.bold(String(killed))}`];
+  if (gone > 0) parts.push(`已退出 ${gone}`);
+  if (failed.length > 0) {
+    parts.push(`失败 ${chalk.red.bold(String(failed.length))}${chalk.dim(`(${failed.map((f) => `PID ${f.pid}:${f.detail ?? '?'}`).join(', ')})`)}`);
+  }
+  killState = { phase: 'result', text: `${chalk.bold(st.name)}：${parts.join(' · ')}` };
+  logger.info({ group: st.name, pids: st.pids, results }, 'kill 分组进程');
+  frozen = false;
+  await tick();
+  scheduleResultClear();
+}
+
+
 function draw(): void {
   const frame = currentFrame();
   lastFrame = frame;
@@ -135,8 +250,8 @@ function draw(): void {
   const parts: string[] = [];
   if (offset > 0) parts.push(`↑ 上方还有 ${offset} 行`);
   if (maxOffset - offset > 0) parts.push(`↓ 下方还有 ${maxOffset - offset} 行`);
-  parts.push('↑↓ 选择 · Enter 展开/收起 · a 全部展开/收起 · 空格 刷新 · q 退出');
-  rows.push(chalk.dim(truncate(parts.join('   '), width - 2)));
+  parts.push('↑↓ 选择 · Enter 展开/收起 · a 全部展开/收起 · k 结束组 · 空格 刷新 · q 退出');
+  rows.push(statusLine(chalk.dim(truncate(parts.join('   '), width - 2)), width));
 
   stdout.write('\x1b[H' + rows.map((l) => l + '\x1b[K').join('\n') + '\x1b[K');
 }
@@ -192,6 +307,8 @@ function quit(): void {
   if (!running) return;
   running = false;
   if (timer) clearTimeout(timer);
+  if (notice) clearTimeout(notice.timer);
+  if (resultTimer) clearTimeout(resultTimer);
   stdout.write('\x1b[?25h');
   if (stdin.isTTY) {
     try {
@@ -217,6 +334,16 @@ function setupKeys(): void {
       quit();
       return;
     }
+    // kill 执行中：忽略一切按键（Ctrl+C 除外）
+    if (killState?.phase === 'running') return;
+    // kill 确认中：仅 y 执行，n/Esc/q 取消，其余忽略
+    if (killState?.phase === 'confirm') {
+      if (key.name === 'y') void executeKill();
+      else if (key.name === 'n' || key.name === 'escape' || key.name === 'q') cancelKill();
+      return;
+    }
+    // kill 结果条：任意键先清除，再正常处理该键
+    if (killState?.phase === 'result') clearKillState();
     if (key.sequence === '+') {
       setExpanded(true);
       return;
@@ -228,6 +355,9 @@ function setupKeys(): void {
     switch (key.name) {
       case 'q':
         quit();
+        break;
+      case 'k':
+        startKillConfirm();
         break;
       case 'space':
       case 'r':
