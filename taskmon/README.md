@@ -26,6 +26,7 @@ pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与�
 | `-t, --top <n>` | 只显示内存最大的前 n 组，0 为全部 | 0 |
 | `-e, --expand` | 展开全部分组（默认全部折叠） | 关 |
 | `--once` | 输出一帧快照后退出（管道/调试友好），配合 `-e` 输出全量快照 | - |
+| `--multi` | 跳过全局单例锁，允许多实例并行 | 关 |
 
 ## 按键
 
@@ -35,6 +36,19 @@ pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与�
 - `k`：结束当前组的全部进程（需二次确认，见下方安全设计）
 - `空格 / r`：立即刷新
 - `q / Ctrl+C`：退出
+
+## 单实例锁（按版本隔离）
+
+交互 TUI 模式下**同一版本只允许一个实例**（同机同用户）：同版本再次启动会打印 `taskmon 已在运行：exe v0.2.0 · PID 1234`（dev 实例显示 `dev`），唤起原实例的控制台窗口（还原最小化 + 前置）后以退出码 0 退出。**不同版本互不干扰可并行**（dev 与 exe、v0.2.2 与 v0.3.0 各算一个版本）。
+
+- 锁文件：`%LOCALAPPDATA%\taskmon\singleton-v<version>.lock`（dev 为 `singleton-vdev.lock`），内容为 JSON：`pid`、`mode`（exe/dev）、`version`、`startedAt`、`hostname`。exe/dev 判定同日志模块（`TASKMON_VERSION` 编译期注入）；不带版本的旧全局锁（`singleton.lock`）会被新版自动清掉
+- **不受锁约束**：`--once`、管道/重定向输出（脚本可并发取快照）、`--version`/`--help`；逃生开关 `--multi`
+- **陈锁自愈**：实例被 `taskkill /F` 等强杀来不及清理时，该版本下次启动会验证锁——`pid` 已死、或 PID 被**其他进程复用**（Win32_Process 的 `CreationDate` 与锁内 `startedAt` 比对 ±5s，白名单 `taskmon.exe`/`node.exe`/`bun.exe`）即删锁接管，无需手工清理；不再使用的旧版本锁文件会残留（百余字节，无害）
+- **唤起原理**：控制台窗口属 conhost / WindowsTerminal 所有，按 PID 找不到窗口；由第二实例拉起一个 PowerShell 子进程，在其内部 `FreeConsole → AttachConsole(目标pid) → GetConsoleWindow` 拿到对方控制台顶层窗口后 `SetForegroundWindow`（最小化先 `SW_RESTORE`；被前台权限拒绝时回退 `SwitchToThisWindow`）
+- 已知限制：
+  - Windows Terminal 多标签时只前置 WT 窗口，**不保证切到 taskmon 所在标签页**——首实例会把标签标题设为 `taskmon` 便于辨识
+  - PowerShell 不可用时进程验证降级为 tasklist 名字匹配（无法防 PID 复用，极端情况可能提示误报）
+  - 单例检查异常（锁目录不可写等）会降级为**无单例保护**直接启动，绝不因此阻塞
 
 ## 结束进程与安全设计
 

@@ -12,6 +12,8 @@ import type { Frame } from './render.js';
 import { allLines } from './render.js';
 import { formatBytes, truncate } from './format.js';
 import { guardKill, killPids } from './kill.js';
+import { activateInstance, ensureSingleton, releaseLock } from './singleton.js';
+import type { LockDecision } from './singleton.js';
 import type { ProcessGroup } from './types.js';
 
 const program = new Command();
@@ -22,10 +24,11 @@ program
   .option('-t, --top <n>', '只显示内存最大的前 n 组（0 = 全部）', (v) => Math.max(0, Math.floor(Number(v) || 0)), 0)
   .option('-e, --expand', '展开全部分组（默认全部折叠，交互中可用 Enter/a 控制）')
   .option('--once', '输出一帧快照后退出（调试 / 管道友好）')
+  .option('--multi', '跳过全局单例锁，允许多实例并行')
   .version(process.env.TASKMON_VERSION ?? 'dev');
 program.parse();
 
-const opts = program.opts<{ interval: number; top: number; expand: boolean; once: boolean }>();
+const opts = program.opts<{ interval: number; top: number; expand: boolean; once: boolean; multi: boolean }>();
 const interactive = Boolean(stdout.isTTY);
 
 let groups: ProcessGroup[] = [];
@@ -405,11 +408,43 @@ function setupKeys(): void {
   });
 }
 
+/**
+ * 全局单例：已有实例则提示并唤起其控制台窗口后退出（退出码 0）；成为首实例则接管锁并在退出时释放。
+ * 仅约束交互 TUI 模式：--once / 管道输出不抢锁也不受阻（脚本可并发用快照）。
+ */
+async function guardSingleton(): Promise<void> {
+  let decision: LockDecision;
+  try {
+    decision = await ensureSingleton();
+  } catch (e) {
+    // 锁目录不可写等：降级为无单例保护，绝不因单例故障阻塞启动
+    logger.warn({ err: e instanceof Error ? e.message : String(e) }, '单例锁检查异常，跳过单例保护');
+    return;
+  }
+  if (decision.action === 'claim') {
+    process.on('exit', () => releaseLock());
+    process.title = 'taskmon'; // WT 下便于辨识标签页（唤起只前置窗口，不保证切标签）
+    return;
+  }
+  const { info } = decision;
+  const modeText = info.mode === 'exe' ? `exe v${info.version}` : 'dev（pnpm dev / pnpm start）';
+  console.log(chalk.yellow(`taskmon 已在运行：${modeText} · PID ${info.pid}`));
+  console.log(chalk.dim('正在唤起原窗口…'));
+  const r = await activateInstance(info.pid);
+  if (!r.ok) console.log(chalk.dim(`无法唤起原窗口（${r.reason}），请手动切换过去`));
+  console.log(chalk.dim(`找不到原窗口？结束旧实例：taskkill /PID ${info.pid} /F；或加 --multi 并行运行`));
+  logger.info({ existingPid: info.pid, mode: info.mode, activated: r.ok }, '检测到已有实例，唤起后退出');
+  process.exit(0);
+}
+
 async function main(): Promise<void> {
   logger.info(
     { version: process.env.TASKMON_VERSION ?? 'dev', mode: opts.once ? 'once' : interactive ? 'tui' : 'pipe', interval: opts.interval, top: opts.top },
     'taskmon 启动',
   );
+  if (!opts.once && interactive && !opts.multi) {
+    await guardSingleton();
+  }
   if (opts.once || !interactive) {
     // 单帧模式：完整打印一帧，适合管道/重定向；-e 展开全部
     try {
