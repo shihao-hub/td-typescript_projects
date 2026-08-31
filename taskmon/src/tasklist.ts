@@ -52,7 +52,7 @@ export function parseTasklistCsv(text: string): ProcessInfo[] {
     const line = rawLine.trim();
     if (!line) continue;
     const fields = splitCsvLine(line);
-    if (fields.length < 5) continue;
+    if (fields.length < 5) continue; // sh-note: 小于五下次循环
     const name = (fields[0] ?? '').trim();
     const pid = Number.parseInt((fields[1] ?? '').trim(), 10);
     if (!name || !Number.isFinite(pid)) continue;
@@ -68,5 +68,6 @@ export async function listProcesses(): Promise<ProcessInfo[]> {
     maxBuffer: 8 * 1024 * 1024,
     timeout: 15_000,
   });
+  // sh-note: 此处的 stdout 需要自己执行命令看一下结构才行，而且我很好奇版本问题
   return parseTasklistCsv(stdout);
 }

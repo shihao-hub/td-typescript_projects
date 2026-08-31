@@ -3,6 +3,7 @@ import { stdin, stdout } from 'node:process';
 import readline from 'node:readline';
 import chalk from 'chalk';
 import { Command } from 'commander';
+import { logger } from './logger.js';
 import { listProcesses } from './tasklist.js';
 import { groupProcesses } from './grouping.js';
 import { renderFrame } from './render.js';
@@ -28,6 +29,7 @@ let groups: ProcessGroup[] = [];
 let totalProcs = 0;
 let lastDate = new Date();
 let error: string | undefined;
+let lastLoggedError: string | undefined;
 let offset = 0;
 let cursor = 0;
 let running = true;
@@ -54,6 +56,7 @@ async function tick(): Promise<void> {
     totalProcs = procs.length;
     lastDate = new Date();
     error = undefined;
+    lastLoggedError = undefined;
     if (!expandInitialized) {
       expandInitialized = true;
       if (opts.expand) {
@@ -64,6 +67,10 @@ async function tick(): Promise<void> {
     }
   } catch (e) {
     error = e instanceof Error ? e.message : String(e);
+    if (error !== lastLoggedError) {
+      lastLoggedError = error;
+      logger.error({ err: error }, '采集进程数据失败');
+    }
   }
   draw();
   if (running) {
@@ -260,6 +267,10 @@ function setupKeys(): void {
 }
 
 async function main(): Promise<void> {
+  logger.info(
+    { version: process.env.TASKMON_VERSION ?? 'dev', mode: opts.once ? 'once' : interactive ? 'tui' : 'pipe', interval: opts.interval, top: opts.top },
+    'taskmon 启动',
+  );
   if (opts.once || !interactive) {
     // 单帧模式：完整打印一帧，适合管道/重定向；-e 展开全部
     try {
@@ -275,7 +286,9 @@ async function main(): Promise<void> {
       console.log(frame.lines.join('\n'));
       process.exit(0);
     } catch (e) {
-      console.error(chalk.red(`采集失败：${e instanceof Error ? e.message : String(e)}`));
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error({ err: msg, mode: 'once' }, '采集进程数据失败');
+      console.error(chalk.red(`采集失败：${msg}`));
       console.error(chalk.yellow('提示：taskmon 依赖 Windows 内置命令 tasklist，请在 Windows 上运行。'));
       process.exit(1);
     }

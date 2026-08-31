@@ -33,6 +33,37 @@ pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与�
 - `空格 / r`：立即刷新
 - `q / Ctrl+C`：退出
 
+## 日志
+
+诊断日志写入文件，控制台完全留给实时表格渲染（`--once` / 管道模式的输出不受影响）。
+
+- 路径：`%LOCALAPPDATA%\taskmon\logs\taskmon.log`（取不到 `LOCALAPPDATA` 时退回系统临时目录）
+- 轮转：按 2MB + 每天一次，最多保留 5 份旧文件（`rotating-file-stream`）
+- 格式随运行方式自动切换（判定依据：exe 打包时 `bun --define` 注入的 `TASKMON_VERSION` 是否存在，见 `src/logger.ts`）：
+  - 开发（`pnpm dev` / `pnpm start`）：**纯文本**（pino-pretty，level=debug）
+  - exe 实际使用：**JSON 行**（level=info），可 `grep` / `jq` 分析
+- 坑：判定处必须使用**全局 `process`**（`import process from 'node:process'` 会让 Bun 把引用重写为内部绑定名，`--define process.env.TASKMON_VERSION` 的文本替换随之失配，注入悄悄失效——曾导致 exe 误走开发分支输出纯文本）
+
+查看日志（PowerShell 实时跟踪）：
+
+```powershell
+Get-Content "$env:LOCALAPPDATA\taskmon\logs\taskmon.log" -Tail 50 -Wait
+```
+
+### 为什么不用 pino-roll（以及任何 pino transport）
+
+pino 的 transport 机制（`pino.transport()`、`transport: { targets }` 配置、`pino-roll` 这类 transport 插件）不是进程内的函数调用：它把序列化/落盘工作交给一个**独立 worker 线程**（thread-stream），而 worker 的脚本文件（`pino/lib/worker.js`、`pino-roll` 的模块源码）是在**运行时**按磁盘上 `node_modules` 路径去 `new Worker(...)` 加载的。
+
+taskmon 的 exe 由 `bun build --compile` 打成单文件，只内嵌构建时分析到的模块图，运行机器上没有 `node_modules`：
+
+1. worker 要加载的文件路径在运行环境不存在，transport 初始化直接失败；
+2. 即使把相关文件拷到 exe 旁边，thread-stream 依赖的 Node worker 线程语义在 Bun 编译产物里也属于未承诺的兼容行为，不可靠。
+
+因此约束是：**exe 里只能用进程内可用的输出流**。方案落定为：
+
+- 轮转：`rotating-file-stream` 的 `createStream()`（纯 JS `Writable` 流），以 `pino({ level }, stream)` 直接挂载；
+- 开发期美化：pino-pretty 以**进程内流**方式挂载（`pretty({ destination: stream })`，不走 transport），该动态 import 只在开发分支执行。
+
 ## 版本与打包（exe）
 
 本次改造的目的：**消除双处维护版本号的漂移**（此前 `package.json` 与 `src/main.ts` 各写一份、已经漂移），并把"哪份源码构建出哪个 exe"的关系固化下来。
