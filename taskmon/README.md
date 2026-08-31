@@ -76,6 +76,9 @@ taskmon 的 exe 由 `bun build --compile` 打成单文件，只内嵌构建时�
 ### 打包
 
 ```bash
+# 将当前项目的补丁版本号（Patch）自增 1，但只修改 package.json 文件，不自动创建 Git commit 和 Git tag。
+# ./scripts/build-exe.ts 不需要修改
+# pnpm version patch --no-git-tag-version
 pnpm exe
 # 等价于：bun scripts/build-exe.ts
 # 底层执行：bun build --compile --define "process.env.TASKMON_VERSION=<version>" \
