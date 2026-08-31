@@ -121,15 +121,14 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Fra
         ? chalk[tier](padStart(`${((g.totalBytes / opts.sysMem.total) * 100).toFixed(1)}%`, PCT_W))
         : ' '.repeat(PCT_W);
 
-    let row =
+    // 行首文本单元格（选中行整体反色；条形图不参与反色，否则嵌套 ANSI 复位码会把彩色块渲成黑块）
+    const head =
       chalk.dim(padStart(String(i + 1), RANK_W)) + GAP +
       (multi ? chalk.bold(nameCell) : nameCell) + GAP +
       (multi ? ' '.repeat(PID_W) : chalk.dim(padStart(String(g.processes[0]!.pid), PID_W))) + GAP +
       chalk.bold(chalk[tier](padStart(formatBytes(g.totalBytes), MEM_W))) + GAP +
-      pctCell + GAP +
-      barCell;
-    if (opts.cursorIndex === i) row = chalk.inverse(row);
-    lines.push(row);
+      pctCell;
+    lines.push((opts.cursorIndex === i ? chalk.inverse(head) : head) + GAP + barCell);
     groupRows.push(lines.length - 1);
 
     // 组内成员行（仅展开时）：PID + 单进程内存 + 组内占比
