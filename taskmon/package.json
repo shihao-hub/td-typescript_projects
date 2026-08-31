@@ -12,7 +12,8 @@
     "start": "node dist/main.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p scripts/tsconfig.json",
-    "exe": "bun scripts/build-exe.ts"
+    "exe": "bun scripts/build-exe.ts",
+    "use": "bun scripts/use-latest-exe.ts"
   },
   "bin": {
     "taskmon": "dist/main.js"
