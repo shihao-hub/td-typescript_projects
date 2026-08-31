@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import type { ProcessGroup } from './types.js';
+import type { SysMem } from './sysmem.js';
 import { bar, displayWidth, formatBytes, padEnd, padStart, truncate } from './format.js';
 
 export interface RenderOptions {
@@ -9,6 +10,8 @@ export interface RenderOptions {
   timestamp: Date;
   intervalSec: number;
   totalProcs: number;
+  /** 物理内存读数：驱动摘要行与组行「占比」（占物理总量） */
+  sysMem?: SysMem;
   /** 已展开的组名集合（多实例组默认折叠） */
   expanded?: ReadonlySet<string>;
   /** 无视 expanded 集合，直接展开全部 */
@@ -54,22 +57,26 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Fra
   const totalMem = allGroups.reduce((s, g) => s + g.totalBytes, 0);
   const maxTotal = groups[0]?.totalBytes ?? 0;
 
-  // 标题 + 时间
+  // 标题 + 时间（右侧留 2 列余量：部分字体把 · 等歧义宽度字符按 2 渲染，恰好占满会换行截尾）
   const time = fmtDateTime(opts.timestamp);
   const title = 'taskmon · 内存监控';
-  lines.push(chalk.bold.cyan(padEnd(title, width - displayWidth(time))) + chalk.dim(time));
+  lines.push(chalk.bold.cyan(padEnd(title, width - displayWidth(time) - 2)) + chalk.dim(time));
 
   // 摘要
-  const stats =
-    `进程 ${chalk.bold(String(opts.totalProcs))}` +
-    chalk.dim(' · ') +
-    `分组 ${chalk.bold(String(allGroups.length))}` +
-    chalk.dim(' · ') +
-    `内存合计 ${chalk.bold(formatBytes(totalMem))}` +
-    chalk.dim(' · ') +
-    `刷新 ${opts.intervalSec}s` +
-    (opts.top > 0 ? chalk.dim(` · 前 ${groups.length} 组`) : '');
-  lines.push(stats);
+  const sep = chalk.dim(' · ');
+  const statsParts = [
+    `进程 ${chalk.bold(String(opts.totalProcs))}`,
+    `分组 ${chalk.bold(String(allGroups.length))}`,
+  ];
+  if (opts.sysMem) {
+    statsParts.push(
+      `物理内存 ${chalk.bold(`${(opts.sysMem.usedPct * 100).toFixed(1)}%`)} 已用` +
+        chalk.dim(`(${formatBytes(opts.sysMem.used)}/${formatBytes(opts.sysMem.total)})`),
+    );
+  }
+  statsParts.push(`工作集合计 ${chalk.bold(formatBytes(totalMem))}`, `刷新 ${opts.intervalSec}s`);
+  if (opts.top > 0) statsParts.push(chalk.dim(`前 ${groups.length} 组`));
+  lines.push(statsParts.join(sep));
 
   // 分隔线
   lines.push(chalk.dim('-'.repeat(width)));
@@ -91,7 +98,7 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Fra
   lines.push(
     chalk.bold(
       padStart('#', RANK_W) + GAP + padEnd('  进程 / 组', nameColW) + GAP + padStart('PID', PID_W) + GAP +
-        padStart('内存', MEM_W) + GAP + padStart('组内%', PCT_W) + GAP + padEnd('分布', barW),
+        padStart('内存', MEM_W) + GAP + padStart('占比', PCT_W) + GAP + padEnd('分布', barW),
     ),
   );
 
@@ -104,18 +111,22 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Fra
     const ind = multi ? (isOpen ? '▾ ' : '▸ ') : '  ';
     const nameCell = padEnd(ind + truncate(label, nameW), nameColW);
 
-    // 组行：排名 + 名称(×N + 展开指示) + [单例时 PID] + 总内存 + 条形图
+    // 组行：排名 + 名称(×N + 展开指示) + [单例时 PID] + 总内存 + 占物理总量% + 条形图
     const ratio = maxTotal > 0 ? g.totalBytes / maxTotal : 0;
     const filled = Math.round(Math.max(0, Math.min(1, ratio)) * barW);
     const barCell =
       (filled > 0 ? chalk[tier]('█'.repeat(filled)) : '') + chalk.dim('░'.repeat(Math.max(0, barW - filled)));
+    const pctCell =
+      opts.sysMem && opts.sysMem.total > 0
+        ? chalk[tier](padStart(`${((g.totalBytes / opts.sysMem.total) * 100).toFixed(1)}%`, PCT_W))
+        : ' '.repeat(PCT_W);
 
     let row =
       chalk.dim(padStart(String(i + 1), RANK_W)) + GAP +
       (multi ? chalk.bold(nameCell) : nameCell) + GAP +
       (multi ? ' '.repeat(PID_W) : chalk.dim(padStart(String(g.processes[0]!.pid), PID_W))) + GAP +
       chalk.bold(chalk[tier](padStart(formatBytes(g.totalBytes), MEM_W))) + GAP +
-      ' '.repeat(PCT_W) + GAP +
+      pctCell + GAP +
       barCell;
     if (opts.cursorIndex === i) row = chalk.inverse(row);
     lines.push(row);

@@ -6,6 +6,7 @@ import { Command } from 'commander';
 import { logger } from './logger.js';
 import { listProcesses } from './tasklist.js';
 import { groupProcesses } from './grouping.js';
+import { readSysMem } from './sysmem.js';
 import { renderFrame } from './render.js';
 import type { Frame } from './render.js';
 import { truncate } from './format.js';
@@ -28,6 +29,7 @@ const interactive = Boolean(stdout.isTTY);
 let groups: ProcessGroup[] = [];
 let totalProcs = 0;
 let lastDate = new Date();
+let sysMem = readSysMem();
 let error: string | undefined;
 let lastLoggedError: string | undefined;
 let offset = 0;
@@ -55,6 +57,7 @@ async function tick(): Promise<void> {
     groups = groupProcesses(procs);
     totalProcs = procs.length;
     lastDate = new Date();
+    sysMem = readSysMem();
     error = undefined;
     lastLoggedError = undefined;
     if (!expandInitialized) {
@@ -99,6 +102,7 @@ function currentFrame(): Frame {
     timestamp: lastDate,
     intervalSec: opts.interval,
     totalProcs,
+    sysMem,
     expanded: expandedNames,
     cursorIndex: interactive ? cursor : undefined,
   });
@@ -132,7 +136,7 @@ function draw(): void {
   if (offset > 0) parts.push(`↑ 上方还有 ${offset} 行`);
   if (maxOffset - offset > 0) parts.push(`↓ 下方还有 ${maxOffset - offset} 行`);
   parts.push('↑↓ 选择 · Enter 展开/收起 · a 全部展开/收起 · 空格 刷新 · q 退出');
-  rows.push(chalk.dim(truncate(parts.join('   '), width)));
+  rows.push(chalk.dim(truncate(parts.join('   '), width - 2)));
 
   stdout.write('\x1b[H' + rows.map((l) => l + '\x1b[K').join('\n') + '\x1b[K');
 }
@@ -281,6 +285,7 @@ async function main(): Promise<void> {
         timestamp: new Date(),
         intervalSec: opts.interval,
         totalProcs: procs.length,
+        sysMem: readSysMem(),
         expandAll: opts.expand,
       });
       console.log(frame.lines.join('\n'));

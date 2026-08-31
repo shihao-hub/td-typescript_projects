@@ -17,6 +17,12 @@ function buildGroups(): ReturnType<typeof groupProcesses> {
   ]);
 }
 
+const GB = 1024 * 1024 * 1024;
+
+function sysMem32() {
+  return { total: 32 * GB, used: 20 * GB, free: 12 * GB, usedPct: 0.625 };
+}
+
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
 function frame(over: Partial<Parameters<typeof renderFrame>[1]> = {}) {
@@ -103,6 +109,30 @@ describe('renderFrame', () => {
     expect(lines.some((l) => l.includes('chrome.exe (2)'))).toBe(true);
     expect(lines.some((l) => l.includes('explorer.exe'))).toBe(false);
     expect(lines[1]).toContain('前 1 组');
+  });
+
+  it('sysMem：摘要含物理内存使用率，组行显示占物理总量%', () => {
+    const f = frame({ sysMem: sysMem32() });
+    const summary = strip(f.lines[1]!);
+    expect(summary).toContain('物理内存');
+    expect(summary).toContain('62.5%');
+    expect(summary).toContain('20.0 GB/32.0 GB');
+    expect(summary).toContain('工作集合计');
+    // 组行：500MB / 32GB = 1.5%
+    expect(strip(f.lines[f.groupRows[0]!]!)).toContain('1.5%');
+  });
+
+  it('sysMem：成员行仍为组内占比', () => {
+    const f = frame({ sysMem: sysMem32(), expanded: new Set(['chrome.exe']) });
+    const member = strip(f.lines[f.groupRows[0]! + 1]!);
+    expect(member).toContain('60.0%'); // 300MB / 500MB
+  });
+
+  it('无 sysMem：摘要无物理内存段，组行占比列留空不报错', () => {
+    const f = frame();
+    expect(strip(f.lines[1]!)).not.toContain('物理内存');
+    const groupRow = strip(f.lines[f.groupRows[0]!]!);
+    expect(groupRow).not.toContain('%');
   });
 
   it('空数据显示提示', () => {
