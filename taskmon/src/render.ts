@@ -85,7 +85,8 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Fra
   }
   statsParts.push(`工作集合计 ${chalk.bold(formatBytes(totalMem))}`, `刷新 ${opts.intervalSec}s`);
   if (opts.top > 0) statsParts.push(chalk.dim(`前 ${groups.length} 组`));
-  header.push(statsParts.join(sep));
+  // 截断到终端宽度：摘要行超宽会回绕，把整帧顶进 scrollback 造成旧表头残留
+  header.push(truncate(statsParts.join(sep), width));
 
   // 分隔线
   header.push(chalk.dim('-'.repeat(width)));

@@ -326,7 +326,8 @@ function quit(): void {
       // 忽略：终端已恢复
     }
   }
-  stdout.write('\x1b[2J\x1b[3J\x1b[H');
+  // 离开备用屏缓冲区，恢复进入前的主屏内容（无需手工清屏，scrollback 完整保留）
+  stdout.write('\x1b[?1049l');
   console.log('taskmon 已退出');
   process.exit(0);
 }
@@ -470,9 +471,23 @@ async function main(): Promise<void> {
   }
 
   process.on('SIGINT', () => quit());
-  stdout.on('resize', () => draw());
+  stdout.on('resize', () => {
+    // resize 后整屏重画：清掉旧尺寸可能残留的行，避免表头/正文错位残留
+    stdout.write('\x1b[2J\x1b[H');
+    draw();
+  });
   setupKeys();
-  stdout.write('\x1b[2J\x1b[3J\x1b[H\x1b[?25l');
+  // 进入备用屏缓冲区：TUI 画在独立屏幕上，不污染主屏 scrollback，
+  // resize 时终端也不会对主屏做 reflow，杜绝旧帧表头残留
+  process.on('exit', () => {
+    // 兜底：异常退出/被强杀前尽力恢复终端（正常 quit 已恢复，重复写幂等）
+    try {
+      stdout.write('\x1b[?25h\x1b[?1049l');
+    } catch {
+      // 忽略：终端已恢复
+    }
+  });
+  stdout.write('\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l');
   await tick();
 }
 
