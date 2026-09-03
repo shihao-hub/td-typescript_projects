@@ -1,0 +1,21 @@
+{
+  "name": "text-extractor",
+  "description": "提取页面元素文本，弹窗编辑并一键复制",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "compile": "tsc --noEmit",
+    "postinstall": "wxt prepare",
+    "load": "wxt build && node scripts/load-into-chrome.mjs",
+    "load:dev": "node scripts/load-into-chrome.mjs .output/chrome-mv3-dev"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "web-ext": "^10.6.0",
+    "wxt": "^0.21.4"
+  }
+}
