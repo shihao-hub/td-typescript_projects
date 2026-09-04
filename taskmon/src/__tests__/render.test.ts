@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { allLines, renderFrame } from '../render.js';
+import { allLines, renderFrame, renderTreeFrame } from '../render.js';
 import type { Frame } from '../render.js';
 import { groupProcesses } from '../grouping.js';
+import { buildTree } from '../proctree.js';
 import type { ProcessInfo } from '../types.js';
 
 const MB = 1024 * 1024;
@@ -161,5 +162,84 @@ describe('renderFrame', () => {
     expect(f.header).toHaveLength(3); // 标题/摘要/分隔线，无列头
     expect(f.body.some((l) => l.includes('未捕获到任何进程'))).toBe(true);
     expect(f.groupRows).toEqual([]);
+  });
+});
+
+describe('renderTreeFrame', () => {
+  const treeProcs: ProcessInfo[] = [
+    { name: 'zed.exe', pid: 1, memBytes: 800 * MB, ppid: 999, orphan: true },
+    { name: 'opencode.exe', pid: 2, memBytes: 900 * MB, ppid: 1 },
+    { name: 'node.exe', pid: 3, memBytes: 300 * MB, ppid: 2 },
+    { name: 'chrome.exe', pid: 4, memBytes: 100 * MB },
+  ];
+  const roots = buildTree(treeProcs);
+
+  const treeFrame = (over: Partial<Parameters<typeof renderTreeFrame>[1]> = {}) =>
+    renderTreeFrame(roots, {
+      width: 100,
+      top: 0,
+      timestamp: new Date('2026-01-01T12:00:00'),
+      intervalSec: 2,
+      totalProcs: 4,
+      topoAvailable: true,
+      ...over,
+    });
+
+  it('标题为进程树，摘要含根数与拓扑状态', () => {
+    const lines = flat(treeFrame());
+    expect(lines[0]).toContain('进程树');
+    expect(lines[1]).toContain('根 2');
+    expect(lines[1]).toContain('拓扑');
+  });
+
+  it('默认折叠只显示根行；根行不显示孤儿 †（Windows 顶层进程父退出是常态）', () => {
+    const f = treeFrame();
+    const txt = flat(f).join('\n');
+    expect(txt).toContain('zed.exe (1)');
+    expect(txt).toContain('chrome.exe');
+    expect(txt).not.toContain('†');
+    expect(txt).not.toContain('opencode.exe'); // 折叠态子行不出现
+  });
+
+  it('展开根：子行带 ├─/└─ 分支符号与正确缩进', () => {
+    const f = treeFrame({ expanded: new Set([1, 2]) });
+    const lines = flat(f);
+    const i1 = lines.findIndex((l) => l.includes('zed.exe'));
+    const i2 = lines.findIndex((l) => l.includes('opencode.exe'));
+    const i3 = lines.findIndex((l) => l.includes('node.exe'));
+    expect(i1).toBeGreaterThan(0);
+    expect(i2).toBe(i1 + 1);
+    expect(i3).toBe(i1 + 2);
+    expect(lines[i2]!).toContain('└─');
+    expect(lines[i3]!).toContain('└─');
+    expect(lines[i3]!.indexOf('└─')).toBeGreaterThan(lines[i2]!.indexOf('└─')); // 更深一层
+  });
+
+  it('子树合计：根行显示 自身+后代 总量', () => {
+    const f = treeFrame({ expanded: new Set([1]) });
+    const rootRow = flat(f).find((l) => l.includes('zed.exe'))!;
+    expect(rootRow).toContain('1.95 GB'); // (800+900+300) MB = 1.953 GB
+  });
+
+  it('拓扑不可用：body 首行给降级提示，摘要显示 拓扑不可用', () => {
+    const f = treeFrame({ topoAvailable: false });
+    expect(flat(f).join('\n')).toContain('拓扑数据不可用');
+    expect(strip(f.header[1]!)).toContain('拓扑不可用');
+    // 行序号不漂移：groupRows 仍指向各节点行
+    expect(f.groupRows.length).toBeGreaterThan(0);
+    for (const r of f.groupRows) expect(r).toBeLessThan(f.body.length);
+  });
+
+  it('groupRows 覆盖全部可见行（树视图每行可选）', () => {
+    const f = treeFrame({ expanded: new Set([1, 2]) });
+    expect(f.groupRows).toEqual([0, 1, 2, 3]);
+  });
+
+  it('top 过滤根数量', () => {
+    const f = treeFrame({ top: 1 });
+    const txt = flat(f).join('\n');
+    expect(txt).toContain('zed.exe');
+    expect(txt).not.toContain('chrome.exe');
+    expect(strip(f.header[1]!)).toContain('前 1 根');
   });
 });
