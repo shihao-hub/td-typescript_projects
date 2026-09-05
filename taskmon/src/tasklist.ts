@@ -1,8 +1,70 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ProcessInfo } from './types.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Windows 代码页 → WHATWG TextDecoder 编码标签。
+ * 未列出的（如 437/850 等 DOS 代码页）TextDecoder 不支持，走 utf-8 回退。
+ */
+const CP_TO_ENCODING: Record<number, string> = {
+  65001: 'utf-8',
+  54936: 'gb18030',
+  936: 'gbk',
+  950: 'big5',
+  932: 'shift_jis',
+  949: 'euc-kr',
+  866: 'ibm866',
+  874: 'windows-874',
+  1250: 'windows-1250',
+  1251: 'windows-1251',
+  1252: 'windows-1252',
+  1253: 'windows-1253',
+  1254: 'windows-1254',
+  1255: 'windows-1255',
+  1256: 'windows-1256',
+  1257: 'windows-1257',
+  1258: 'windows-1258',
+};
+
+/** 按指定代码页解码；代码页未知或标签不受支持时回退 utf-8 */
+export function decodeWithCodePage(buf: Buffer, codePage: number | undefined): string {
+  const label = codePage === undefined ? undefined : CP_TO_ENCODING[codePage];
+  if (label === undefined || label === 'utf-8') return buf.toString('utf8');
+  try {
+    return new TextDecoder(label).decode(buf);
+  } catch {
+    return buf.toString('utf8');
+  }
+}
+
+/** 检测活动代码页（chcp 输出的数字为 ASCII，latin1 读取足够），失败返回 undefined */
+export function detectCodePage(): number | undefined {
+  try {
+    const out = execFileSync('chcp.com', {
+      encoding: 'latin1',
+      timeout: 5_000,
+      windowsHide: true,
+    });
+    const m = /(\d{3,5})/.exec(out);
+    return m ? Number(m[1]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+let cachedCodePage: number | undefined;
+let codePageDetected = false;
+
+/** 活动代码页（模块级缓存，进程生命周期内只检测一次） */
+function activeCodePage(): number | undefined {
+  if (!codePageDetected) {
+    codePageDetected = true;
+    cachedCodePage = detectCodePage();
+  }
+  return cachedCodePage;
+}
 
 /** 解析 tasklist CSV 单行（处理引号内逗号、双引号转义） */
 export function splitCsvLine(line: string): string[] {
@@ -67,7 +129,8 @@ export async function listProcesses(): Promise<ProcessInfo[]> {
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
     timeout: 15_000,
+    encoding: 'buffer',
   });
-  // sh-note: 此处的 stdout 需要自己执行命令看一下结构才行，而且我很好奇版本问题
-  return parseTasklistCsv(stdout);
+  // tasklist 管道输出为 OEM 代码页（中文系统 CP936/GBK），按 UTF-8 直解中文进程名会乱码
+  return parseTasklistCsv(decodeWithCodePage(stdout, activeCodePage()));
 }

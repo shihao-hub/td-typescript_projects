@@ -173,6 +173,7 @@ git tag -d taskmon/v0.2.0     # 删除本地 tag（打错时；已推送的话�
 ## 数据口径
 
 - **进程内存 = 工作集（working set）**，来自 `tasklist`。工作集会**重复计算共享内存**（同一份 DLL 计入每个映射它的进程），因此「工作集合计」可大于物理内存总量，属正常现象。
+- **进程名**：主来源 `tasklist`，按系统活动代码页解码（`chcp` 检测，模块级缓存；中文系统 CP936/GBK、日文 CP932 等，无对应 `TextDecoder` 解码器的代码页回退 UTF-8）；CIM 拓扑可用时优先采用 CIM 通道的 UTF-8 进程名兜底。
 - **父子拓扑（PPID / 创建时间 / 命令行）**来自 PowerShell `Get-CimInstance Win32_Process`，独立低频采集（见「进程树与父子拓扑」），比内存数字滞后数秒属正常现象。
 - **物理内存**来自 `os.totalmem()` / `os.freemem()`（Windows 对应 `GlobalMemoryStatusEx`），摘要行的「物理内存 X% 已用」≈ 任务管理器的「使用中 / 总量」。
 - **占比列**：组行/树行 = 组总内存或子树合计 / 物理总量（因工作集虚高，各占比之和可能 >100%）；成员行 = 单进程 / 组总量。
@@ -180,5 +181,4 @@ git tag -d taskmon/v0.2.0     # 删除本地 tag（打错时；已推送的话�
 ## 已知限制
 
 - 数据源为 Windows 内置命令 `tasklist`（Win11 24H2 移除 wmic 后依然可用），仅支持 Windows。
-- `tasklist` 输出为 OEM 编码，非 ASCII 进程名（如中文命名的 exe）可能显示乱码。
 - 建议在 Windows Terminal 中运行以获得最佳颜色与字符渲染。

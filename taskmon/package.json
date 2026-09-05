@@ -1,6 +1,6 @@
 {
   "name": "taskmon",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Windows 任务管理器·内存版：按进程名分组展示内存占用，控制台实时刷新",
   "type": "module",
   "engines": {
@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p scripts/tsconfig.json",
     "exe": "bun scripts/build-exe.ts",
     "use": "bun scripts/use-latest-exe.ts",
+    "release": "bun scripts/build-exe.ts --tag && bun scripts/use-latest-exe.ts",
     "clean-release": "bun scripts/clean-release.ts"
   },
   "bin": {

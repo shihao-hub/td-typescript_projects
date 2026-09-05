@@ -27,7 +27,7 @@ export function isValidParent(
 }
 
 /**
- * 用 CIM 拓扑补全 tasklist 进程：ppid / 创建时间 / 命令行 / 父进程名 / 孤儿标记。
+ * 用 CIM 拓扑补全 tasklist 进程：进程名 / ppid / 创建时间 / 命令行 / 父进程名 / 孤儿标记。
  * - 无 CIM 数据的进程原样保留（树视图中作为无标记的根，组视图中不显示父列）
  * - orphan=true：曾有父但已不可达——父不在 CIM 快照中，或 PPID 已被复用；
  *   ppid<=0 与自引用（System Idle/System 等）视为"从未有父"，不标孤儿
@@ -45,6 +45,8 @@ export function mergeTopology(procs: ProcessInfo[], cim: Map<number, CimProc>): 
       isValidParent(c.pid, c.created ?? undefined, parent ? { pid: parent.pid, creationDate: parent.created ?? undefined } : undefined);
     return {
       ...p,
+      // CIM name 为 UTF-8 权威数据：覆盖 tasklist 代码页解码可能残留的残损字符
+      name: c.name,
       ppid: c.ppid,
       creationDate: c.created ?? undefined,
       commandLine: c.cmd ?? undefined,

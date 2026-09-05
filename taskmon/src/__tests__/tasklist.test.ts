@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMemField, parseTasklistCsv, splitCsvLine } from '../tasklist.js';
+import { decodeWithCodePage, parseMemField, parseTasklistCsv, splitCsvLine } from '../tasklist.js';
 
 describe('splitCsvLine', () => {
   it('处理引号内的逗号与双引号转义', () => {
@@ -29,6 +29,30 @@ describe('parseMemField', () => {
   it('N/A 与空值返回 0', () => {
     expect(parseMemField('N/A')).toBe(0);
     expect(parseMemField('')).toBe(0);
+  });
+});
+
+describe('decodeWithCodePage', () => {
+  it('CP936 按 GBK 解码中文进程名', () => {
+    // "笔记管理系统" 的 GBK 字节（实测 tasklist 原始输出）
+    const buf = Buffer.from([0xb1, 0xca, 0xbc, 0xc7, 0xb9, 0xdc, 0xc0, 0xed, 0xcf, 0xb5, 0xcd, 0xb3]);
+    expect(decodeWithCodePage(buf, 936)).toBe('笔记管理系统');
+  });
+
+  it('CP936 解码 ASCII 保持不变', () => {
+    expect(decodeWithCodePage(Buffer.from('chrome.exe'), 936)).toBe('chrome.exe');
+  });
+
+  it('CP65001 直通 UTF-8', () => {
+    expect(decodeWithCodePage(Buffer.from('笔记', 'utf8'), 65001)).toBe('笔记');
+  });
+
+  it('未知代码页回退 UTF-8', () => {
+    expect(decodeWithCodePage(Buffer.from('笔记', 'utf8'), 99999)).toBe('笔记');
+  });
+
+  it('代码页未检测到（undefined）回退 UTF-8', () => {
+    expect(decodeWithCodePage(Buffer.from('笔记', 'utf8'), undefined)).toBe('笔记');
   });
 });
 

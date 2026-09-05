@@ -76,6 +76,12 @@ describe('mergeTopology', () => {
     expect(out[0]!.parentName).toBeUndefined();
   });
 
+  it('CIM name 覆盖 tasklist 残损名（代码页乱码兜底）', () => {
+    const garbled: CimProc = { pid: 30, ppid: 0, name: '笔记管理系统.exe', created: T0, cmd: null };
+    const out = mergeTopology([p('\u25C6**\'\u25C6\u2666\u2666eT.exe', 30, 10)], cimMap(garbled));
+    expect(out[0]!.name).toBe('笔记管理系统.exe');
+  });
+
   it('无 CIM 数据的进程原样保留（不标孤儿）', () => {
     const out = mergeTopology([p('a.exe', 1, 1)], new Map());
     expect(out[0]).toEqual(p('a.exe', 1, 1));
