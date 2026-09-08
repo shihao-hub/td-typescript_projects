@@ -1,0 +1,7 @@
+/* 全局样式：antd 组件样式由 CSS-in-JS 注入，这里只管页面骨架 */
+
+body {
+  margin: 0;
+  font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: #f5f5f5;
+}
