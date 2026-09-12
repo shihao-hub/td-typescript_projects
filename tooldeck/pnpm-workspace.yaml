@@ -1,0 +1,6 @@
+# pnpm 11 构建脚本许可（原 package.json 的 pnpm.onlyBuiltDependencies 已废弃）
+# 本文件仅为单项目设置，不引入 workspace 关联
+allowBuilds:
+  electron: true
+  electron-winstaller: true
+  esbuild: true
