@@ -1,197 +1,113 @@
-import { noopPainter } from './color.js';
-import type { Painter } from './color.js';
+import chalk from 'chalk';
 
 export interface RenderOptions {
-  /** 着色器，默认 noop（纯文本） */
-  painter?: Painter;
-  /** 终端可视宽度上限，超出截断；默认 120 */
+  /** 终端宽度上限，超出的单行截断；默认 120 */
   width?: number;
 }
 
 const DEFAULT_WIDTH = 120;
 const ELLIPSIS = '…';
 
-/** 树形连接符 */
-const TEE = '├─ ';
-const ELBOW = '└─ ';
-const PIPE = '│  ';
-const SPACE = '   ';
-
-/** 摘要标签优先使用的键名（命中即用其值做数组对象元素的标题） */
-const PREFERRED_KEYS = ['cmd', 'command', 'name', 'flag', 'title', 'id', 'type', 'key', 'path', 'url', 'method'];
-
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** CJK 等宽字符按 2 列计的简易可视宽度 */
-function visualWidth(s: string): number {
-  let w = 0;
-  for (const ch of s) {
-    const c = ch.codePointAt(0) ?? 0;
-    w += c >= 0x1100 && (c <= 0x115f || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) || (c >= 0xffe0 && c <= 0xffe6)) ? 2 : 1;
+/** 按字符数截断（不分中英宽度），尾部以 … 结尾 */
+function clip(plain: string, budget: number): string {
+  if (budget <= 0) return '';
+  if (plain.length <= budget) return plain;
+  return plain.slice(0, Math.max(0, budget - ELLIPSIS.length)) + ELLIPSIS;
+}
+
+/** 原始值同行显示的着色文本；budget 为该值可占用的字符数 */
+function primitiveText(v: unknown, budget: number): string {
+  if (typeof v === 'string') {
+    let s = JSON.stringify(v);
+    if (s.length > budget) {
+      // 预留闭引号宽度，截断后补上保持视觉完整
+      s = clip(s, budget - 1);
+      if (!s.endsWith('"')) s += '"';
+    }
+    return chalk.green(s);
   }
-  return w;
-}
-
-/** 按可视宽度截断，尾部以 … 结尾 */
-function truncate(s: string, maxWidth: number): string {
-  if (maxWidth <= 0) return '';
-  if (visualWidth(s) <= maxWidth) return s;
-  const budget = maxWidth - visualWidth(ELLIPSIS);
-  let w = 0;
-  let out = '';
-  for (const ch of s) {
-    const cw = visualWidth(ch);
-    if (w + cw > budget) break;
-    out += ch;
-    w += cw;
-  }
-  return out + ELLIPSIS;
-}
-
-/** 原始值的纯文本形态：字符串带引号（保持 JSON 语感） */
-function primitivePlain(v: unknown): string {
-  if (typeof v === 'string') return JSON.stringify(v);
-  if (typeof v === 'number') return String(v);
-  if (typeof v === 'boolean') return String(v);
-  return 'null';
-}
-
-function primitivePainted(v: unknown, p: Painter): string {
-  if (typeof v === 'string') return p.string(JSON.stringify(v));
-  if (typeof v === 'number') return p.number(String(v));
-  if (typeof v === 'boolean') return p.bool(String(v));
-  return p.nullish('null');
+  if (typeof v === 'number') return chalk.yellow(String(v));
+  if (typeof v === 'boolean') return chalk.dim(String(v));
+  return chalk.dim('null');
 }
 
 /**
- * 原始值单行显示，超预算时截断（字符串截断后补闭引号，保持视觉完整）
- * budget 为该值可占用的可视列数；painter 参与着色
- */
-function primitiveLine(v: unknown, p: Painter, budget: number): string {
-  let plain = primitivePlain(v);
-  const isStr = typeof v === 'string';
-  if (visualWidth(plain) > budget) {
-    // 字符串预留闭引号宽度，截断后补上保持视觉完整
-    plain = truncate(plain, isStr ? budget - 1 : budget);
-    if (isStr && !plain.endsWith('"')) plain += '"';
-  }
-  return primitivePaintedLike(v, plain, p);
-}
-
-/** 按值类型把已构造好的 plain 文本交给对应着色函数 */
-function primitivePaintedLike(v: unknown, plain: string, p: Painter): string {
-  if (typeof v === 'string') return p.string(plain);
-  if (typeof v === 'number') return p.number(plain);
-  if (typeof v === 'boolean') return p.bool(plain);
-  return p.nullish(plain);
-}
-
-/** 数组对象元素的摘要：优先常见键名，否则取第一个 string 字段 */
-function summarizeObject(obj: Record<string, unknown>): string | undefined {
-  for (const k of PREFERRED_KEYS) {
-    if (typeof obj[k] === 'string') return obj[k] as string;
-  }
-  for (const v of Object.values(obj)) {
-    if (typeof v === 'string') return v;
-  }
-  return undefined;
-}
-
-/**
- * 通用 JSON → 树形文本。纯函数：相同输入与 painter 得到相同输出。
- * 形态约定：
- * - 对象：键为节点，原始值同行显示；空对象/空数组显示 {} / []
- * - 数组：元素以 [i] 为节点；原始值同行，对象元素以摘要做标题后仍展开全部字段
- * - 单行超出 width（按 CJK 双宽计）截断加 …
+ * 通用 JSON → 树形文本（taskmon 风格：每层 2 空格缩进 + ├─/└─，无竖线延续线）。
+ *
+ * 规则：
+ * - 对象：每个键一行，原始值同行显示；空对象/空数组显示 {} / []
+ * - 数组：键名附 (N) 计数，元素以 [i] 为节点；原始值同行，对象元素展开全部字段
+ * - 颜色：树符号/计数/[i]/bool/null 灰，字符串绿，数字黄；非 TTY 或 NO_COLOR 自动无色
  */
 export function render(value: unknown, opts: RenderOptions = {}): string[] {
-  const painter = opts.painter ?? noopPainter;
   const width = opts.width ?? DEFAULT_WIDTH;
   const out: string[] = [];
 
-  // 顶层原始值：单行直接显示
-  if (!isPlainObject(value) && !Array.isArray(value)) {
-    out.push(primitiveLine(value, painter, width));
-    return out;
-  }
+  const prefix = (depth: number, isLast: boolean): string =>
+    '  '.repeat(depth - 1) + (isLast ? '└─ ' : '├─ ');
 
-  const emitEntry = (key: string, v: unknown, prefix: string, isLast: boolean): void => {
-    const branch = isLast ? ELBOW : TEE;
-    const head = prefix + branch;
-    const childPrefix = prefix + (isLast ? SPACE : PIPE);
-    const label = painter.key(key) + painter.empty(':');
-    const budget = width - visualWidth(head) - visualWidth(key) - 2;
+  const emitEntry = (key: string, v: unknown, depth: number, isLast: boolean): void => {
+    const head = prefix(depth, isLast);
+    let label = key + ':';
+    if (Array.isArray(v) && v.length > 0) label = `${key} (${v.length}):`;
 
     if (isPlainObject(v)) {
       const keys = Object.keys(v);
       if (keys.length === 0) {
-        out.push(head + label + ' ' + painter.empty('{}'));
+        out.push(head + label + ' ' + chalk.dim('{}'));
         return;
       }
       out.push(head + label);
-      emitChildren(keys, v, childPrefix);
+      keys.forEach((k, i) => emitEntry(k, v[k], depth + 1, i === keys.length - 1));
     } else if (Array.isArray(v)) {
       if (v.length === 0) {
-        out.push(head + label + ' ' + painter.empty('[]'));
+        out.push(head + label + ' ' + chalk.dim('[]'));
         return;
       }
       out.push(head + label);
-      emitElements(v, childPrefix);
+      v.forEach((el, i) => emitElement(i, el, depth + 1, i === v.length - 1));
     } else {
-      out.push(head + label + ' ' + primitiveLine(v, painter, budget));
+      const budget = width - head.length - key.length - 2;
+      out.push(head + label + ' ' + primitiveText(v, budget));
     }
   };
 
-  const emitChildren = (keys: string[], obj: Record<string, unknown>, prefix: string): void => {
-    keys.forEach((k, i) => {
-      emitEntry(k, obj[k], prefix, i === keys.length - 1);
-    });
-  };
-
-  const emitElement = (i: number, v: unknown, prefix: string, isLast: boolean): void => {
-    const branch = isLast ? ELBOW : TEE;
-    const head = prefix + branch;
-    const childPrefix = prefix + (isLast ? SPACE : PIPE);
-    const index = painter.index(`[${i}]`);
-    const budget = width - visualWidth(head) - String(i).length - 3;
+  const emitElement = (i: number, v: unknown, depth: number, isLast: boolean): void => {
+    const head = prefix(depth, isLast);
+    const label = chalk.dim(`[${i}]`);
 
     if (isPlainObject(v)) {
       const keys = Object.keys(v);
       if (keys.length === 0) {
-        out.push(head + index + ' ' + painter.empty('{}'));
+        out.push(head + label + ' ' + chalk.dim('{}'));
         return;
       }
-      const summary = summarizeObject(v);
-      if (summary !== undefined) {
-        out.push(head + index + ' ' + painter.summary(truncate(summary, budget)));
-      } else {
-        out.push(head + index);
-      }
-      emitChildren(keys, v, childPrefix);
+      out.push(head + label + chalk.dim(':'));
+      keys.forEach((k, j) => emitEntry(k, v[k], depth + 1, j === keys.length - 1));
     } else if (Array.isArray(v)) {
       if (v.length === 0) {
-        out.push(head + index + ' ' + painter.empty('[]'));
+        out.push(head + label + ' ' + chalk.dim('[]'));
         return;
       }
-      out.push(head + index);
-      emitElements(v, childPrefix);
+      out.push(head + label + chalk.dim(':'));
+      v.forEach((el, j) => emitElement(j, el, depth + 1, j === v.length - 1));
     } else {
-      out.push(head + index + ' ' + primitiveLine(v, painter, budget));
+      const budget = width - head.length - String(i).length - 5;
+      out.push(head + label + ' ' + primitiveText(v, budget));
     }
-  };
-
-  const emitElements = (arr: unknown[], prefix: string): void => {
-    arr.forEach((v, i) => {
-      emitElement(i, v, prefix, i === arr.length - 1);
-    });
   };
 
   if (isPlainObject(value)) {
-    emitChildren(Object.keys(value), value, '');
+    const keys = Object.keys(value);
+    keys.forEach((k, i) => emitEntry(k, value[k], 1, i === keys.length - 1));
+  } else if (Array.isArray(value)) {
+    value.forEach((el, i) => emitElement(i, el, 1, i === value.length - 1));
   } else {
-    emitElements(value, '');
+    out.push(primitiveText(value, width));
   }
   return out;
 }
