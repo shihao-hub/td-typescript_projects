@@ -39,8 +39,11 @@ function isPackaged(): boolean {
   return process.env.TASKMON_VERSION !== undefined;
 }
 
+// 数据目录：%APPDATA%\language_projects\taskmon\，取不到 APPDATA 回退 ~/.language_projects/taskmon/
 function lockDir(): string {
-  return join(process.env.LOCALAPPDATA ?? os.tmpdir(), 'taskmon');
+  const appdata = process.env.APPDATA
+  if (appdata) return join(appdata, 'language_projects', 'taskmon')
+  return join(os.homedir(), '.language_projects', 'taskmon')
 }
 
 function lockPath(): string {

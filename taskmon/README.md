@@ -45,7 +45,7 @@ pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与�
 
 交互 TUI 模式下**同一版本只允许一个实例**（同机同用户）：同版本再次启动会打印 `taskmon 已在运行：exe v0.2.0 · PID 1234`（dev 实例显示 `dev`），唤起原实例的控制台窗口（还原最小化 + 前置）后以退出码 0 退出。**不同版本互不干扰可并行**（dev 与 exe、v0.2.2 与 v0.3.0 各算一个版本）。
 
-- 锁文件：`%LOCALAPPDATA%\taskmon\singleton-v<version>.lock`（dev 为 `singleton-vdev.lock`），内容为 JSON：`pid`、`mode`（exe/dev）、`version`、`startedAt`、`hostname`。exe/dev 判定同日志模块（`TASKMON_VERSION` 编译期注入）；不带版本的旧全局锁（`singleton.lock`）会被新版自动清掉
+- 锁文件：`%APPDATA%\language_projects\taskmon\singleton-v<version>.lock`（dev 为 `singleton-vdev.lock`；取不到 APPDATA 回退 `~/.language_projects/taskmon/`），内容为 JSON：`pid`、`mode`（exe/dev）、`version`、`startedAt`、`hostname`。exe/dev 判定同日志模块（`TASKMON_VERSION` 编译期注入）；不带版本的旧全局锁（`singleton.lock`）会被新版自动清掉
 - **不受锁约束**：`--once`、管道/重定向输出（脚本可并发取快照）、`--version`/`--help`；逃生开关 `--multi`
 - **陈锁自愈**：实例被 `taskkill /F` 等强杀来不及清理时，该版本下次启动会验证锁——`pid` 已死、或 PID 被**其他进程复用**（Win32_Process 的 `CreationDate` 与锁内 `startedAt` 比对 ±5s，白名单 `taskmon.exe`/`node.exe`/`bun.exe`）即删锁接管，无需手工清理；不再使用的旧版本锁文件会残留（百余字节，无害）
 - **唤起原理**：控制台窗口属 conhost / WindowsTerminal 所有，按 PID 找不到窗口；由第二实例拉起一个 PowerShell 子进程，在其内部 `FreeConsole → AttachConsole(目标pid) → GetConsoleWindow` 拿到对方控制台顶层窗口后 `SetForegroundWindow`（最小化先 `SW_RESTORE`；被前台权限拒绝时回退 `SwitchToThisWindow`）
@@ -82,7 +82,7 @@ pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与�
 
 诊断日志写入文件，控制台完全留给实时表格渲染（`--once` / 管道模式的输出不受影响）。
 
-- 路径：`%LOCALAPPDATA%\taskmon\logs\taskmon.log`（取不到 `LOCALAPPDATA` 时退回系统临时目录）
+- 路径：`%APPDATA%\language_projects\taskmon\logs\taskmon.log`（取不到 `APPDATA` 时回退 `~/.language_projects/taskmon/logs/`）
 - 轮转：按 2MB + 每天一次，最多保留 5 份旧文件（`rotating-file-stream`）
 - 格式随运行方式自动切换（判定依据：exe 打包时 `bun --define` 注入的 `TASKMON_VERSION` 是否存在，见 `src/logger.ts`）：
   - 开发（`pnpm dev` / `pnpm start`）：**纯文本**（pino-pretty，level=debug）
@@ -92,7 +92,7 @@ pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与�
 查看日志（PowerShell 实时跟踪）：
 
 ```powershell
-Get-Content "$env:LOCALAPPDATA\taskmon\logs\taskmon.log" -Tail 50 -Wait
+Get-Content "$env:APPDATA\language_projects\taskmon\logs\taskmon.log" -Tail 50 -Wait
 ```
 
 ### 为什么不用 pino-roll（以及任何 pino transport）

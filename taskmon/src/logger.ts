@@ -9,10 +9,14 @@ import type { Logger } from 'pino';
 // 注意：必须用全局 process，import process 会导致 define 的文本替换失配（详见 README「日志」）
 const isPackaged = process.env.TASKMON_VERSION !== undefined;
 
+// 日志目录：%APPDATA%\language_projects\taskmon\logs\，取不到 APPDATA 回退 ~/.language_projects/taskmon/logs/
 function logDir(): string {
-  const dir = join(process.env.LOCALAPPDATA ?? os.tmpdir(), 'taskmon', 'logs');
-  mkdirSync(dir, { recursive: true });
-  return dir;
+  const base = process.env.APPDATA
+    ? join(process.env.APPDATA, 'language_projects')
+    : join(os.homedir(), '.language_projects')
+  const dir = join(base, 'taskmon', 'logs')
+  mkdirSync(dir, { recursive: true })
+  return dir
 }
 
 async function createLogger(): Promise<Logger> {
