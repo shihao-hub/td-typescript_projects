@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { render } from '../render.js';
+import { displayWidth } from '../format.js';
+import { flattenTree } from '../flatten.js';
+import { formatRow, render } from '../render.js';
 
 const WIDE = 500;
 
@@ -70,6 +72,26 @@ describe('render 数组', () => {
 describe('render 截断', () => {
   it('超宽字符串按字符数截断并保持引号闭合', () => {
     expect(render({ desc: 'aaaaaaaaaabbbbbbbbbb' }, { width: 22 })).toEqual(['└─ desc: "aaaaaaaaaa…"']);
+  });
+});
+
+describe('render CJK 截断（显示宽度感知）', () => {
+  it('长中文串窄宽下按显示宽度截断且行宽不超限', () => {
+    const lines = render({ desc: '中文宽度测试'.repeat(4) }, { width: 20 });
+    expect(lines).toHaveLength(1);
+    const line = lines[0]!;
+    expect(displayWidth(line)).toBeLessThanOrEqual(20);
+    expect(line).toContain('…');
+    expect(line.endsWith('"')).toBe(true);
+  });
+});
+
+describe('formatRow colored:false', () => {
+  it('输出不含任何 ANSI 转义', () => {
+    const rows = flattenTree({ a: 'x', b: [1], c: { d: true }, e: null });
+    for (const r of rows) {
+      expect(formatRow(r, { width: 100, colored: false, indicators: true })).not.toMatch(/\x1b\[/);
+    }
   });
 });
 
