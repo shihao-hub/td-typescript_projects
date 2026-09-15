@@ -3,7 +3,7 @@ import { render } from './render.js';
 import { runTui } from './tui.js';
 
 /** 与 package.json 的 version 保持同步（package.json 在 rootDir 外，tsc 无法 import） */
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 /** PS 5.1 管道会按控制台编码转码损坏中文 JSON，解析失败时给出可行动的提示 */
 const PS51_HINT = [

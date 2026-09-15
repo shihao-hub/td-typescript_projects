@@ -1,6 +1,6 @@
 {
   "name": "jtree",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "通用 JSON → 终端树形渲染器（stdin 管道）",
   "type": "module",
   "engines": {
