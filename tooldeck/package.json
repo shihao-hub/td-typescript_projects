@@ -1,7 +1,7 @@
 {
   "name": "tooldeck",
   "version": "0.1.0",
-  "description": "CLI 工具的统一桌面 GUI 壳（第一阶段：exestarter 模块）",
+  "description": "CLI 工具的统一桌面 GUI 壳（通用 MCP 前端）",
   "main": "./out/main/index.js",
   "author": "shihao",
   "homepage": "https://github.com/shihao-hub/td-typescript_projects",
@@ -21,7 +21,11 @@
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
-    "@electron-toolkit/utils": "^4.0.0"
+    "@electron-toolkit/utils": "^4.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@rjsf/core": "^6.10.0",
+    "@rjsf/utils": "^6.10.0",
+    "@rjsf/validator-cfworker": "^6.10.0"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",

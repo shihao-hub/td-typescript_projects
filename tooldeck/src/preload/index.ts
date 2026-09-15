@@ -1,21 +1,48 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 // 白名单 API：渲染层唯一的能力出口，只有这几个方法，不暴露 ipcRenderer 本体
+
+export interface McpServerStatusPayload {
+  id: string
+  state: 'disconnected' | 'connecting' | 'connected' | 'error'
+  message?: string
+}
+
 const api = {
-  cliExec: (exePath: string, args: string[], timeoutMs?: number): Promise<unknown> =>
-    ipcRenderer.invoke('cli:exec', { exePath, args, timeoutMs }),
-  cliExecDetached: (exePath: string, args: string[]): Promise<{ ok: boolean }> =>
-    ipcRenderer.invoke('cli:exec-detached', { exePath, args }),
-  cliDetect: (explicit?: string): Promise<string | null> =>
-    ipcRenderer.invoke('cli:detect', { explicit }),
+  mcpServers: (): Promise<unknown> => ipcRenderer.invoke('mcp:servers'),
+  mcpReconnect: (id: string): Promise<{ ok: boolean; error?: { message: string } }> =>
+    ipcRenderer.invoke('mcp:reconnect', { id }),
+  mcpDisconnect: (id: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('mcp:disconnect', { id }),
+  mcpListTools: (
+    id: string
+  ): Promise<{ ok: boolean; tools?: unknown[]; error?: { message: string } }> =>
+    ipcRenderer.invoke('mcp:list-tools', { id }),
+  mcpCall: (
+    callId: string,
+    id: string,
+    tool: string,
+    args: Record<string, unknown>
+  ): Promise<unknown> => ipcRenderer.invoke('mcp:call', { callId, id, tool, args }),
+  mcpCancel: (callId: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('mcp:cancel', { callId }),
+  mcpDetect: (projectDir: string, exeName: string): Promise<string | null> =>
+    ipcRenderer.invoke('mcp:detect', { projectDir, exeName }),
+  onMcpStatus: (cb: (status: McpServerStatusPayload) => void): (() => void) => {
+    const listener = (_e: unknown, status: McpServerStatusPayload): void => cb(status)
+    ipcRenderer.on('mcp:status', listener)
+    return () => ipcRenderer.removeListener('mcp:status', listener)
+  },
   pickExe: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('dialog:pickExe', { defaultPath }),
   pickDir: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('dialog:pickDir', { defaultPath }),
-  getSettings: (): Promise<{ exePath: string }> => ipcRenderer.invoke('settings:get'),
-  setSettings: (exePath: string): Promise<{ ok: boolean }> =>
-    ipcRenderer.invoke('settings:set', { exePath })
+  getSettings: (): Promise<unknown> => ipcRenderer.invoke('settings:get'),
+  setSettings: (servers: unknown): Promise<{ ok: boolean; error?: { message: string } }> =>
+    ipcRenderer.invoke('settings:set', { servers })
 }
+
+export type TooldeckApi = typeof api
 
 if (process.contextIsolated) {
   try {

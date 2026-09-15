@@ -1,99 +1,160 @@
-﻿import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { bridge } from '@renderer/common/bridge'
 import { useToast } from '@renderer/common/toast'
-import { client, detectCli, setCliPath } from '../exestarter/client'
+import type { McpServerConfig } from '@renderer/common/types'
 
-// 设置面板：exestarter.exe 路径输入 + 自动探测 + 当前 CLI 版本回显
+// 设置：MCP server 连接配置（exe 路径 / 启动参数 / 启用开关）。
+// 保存后由主进程断开旧连接，新配置在各模块访问时懒重连。
+
+function parseArgs(s: string): string[] {
+  return s
+    .split(' ')
+    .map((a) => a.trim())
+    .filter((a) => a.length > 0)
+}
+
 export function SettingsModule(): React.JSX.Element {
   const toast = useToast()
-  const [exePath, setExePath] = useState('')
-  const [version, setVersion] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [servers, setServers] = useState<McpServerConfig[]>([])
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
-    bridge.getSettings().then((s) => setExePath(s.exePath))
+    void (async () => {
+      const s = await bridge.getSettings()
+      setServers(s.servers)
+      setLoaded(true)
+    })()
   }, [])
 
-  const refreshVersion = useCallback(async (path: string): Promise<void> => {
-    setVersion(null)
-    if (!path) return
-    setCliPath(path)
-    const r = await client.version()
-    setVersion(r.ok ? (r.data?.version ?? '?') : `${r.error?.code}: ${r.error?.message}`)
-  }, [])
+  function update(id: string, patch: Partial<McpServerConfig>): void {
+    setServers((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)))
+  }
 
-  const detect = async (): Promise<void> => {
-    setBusy(true)
-    try {
-      const found = await detectCli()
-      if (found) {
-        setExePath(found)
-        await refreshVersion(found)
-        toast('success', `已探测到: ${found}`)
-      } else {
-        toast('error', '自动探测未找到 exestarter.exe')
-      }
-    } finally {
-      setBusy(false)
+  function addServer(template: 'clictl' | 'blank'): void {
+    const preset: McpServerConfig =
+      template === 'clictl'
+        ? { id: 'clictl', label: 'clictl', exePath: '', args: ['mcp'], enabled: true }
+        : { id: '', label: '', exePath: '', args: [], enabled: true }
+    setServers((prev) => [...prev, preset])
+  }
+
+  function removeServer(id: string): void {
+    setServers((prev) => prev.filter((s) => s.id !== id))
+  }
+
+  async function autoDetect(id: string): Promise<void> {
+    const hit = await bridge.mcpDetect(id, `${id}.exe`)
+    if (hit) {
+      update(id, { exePath: hit })
+      toast('success', `探测到 ${hit}`)
+    } else {
+      toast('error', '未探测到，请手动配置路径')
     }
   }
 
-  const save = async (): Promise<void> => {
-    setBusy(true)
-    try {
-      const trimmed = exePath.trim()
-      await bridge.setSettings(trimmed)
-      setCliPath(trimmed || null)
-      await refreshVersion(trimmed)
-      toast('success', '设置已保存')
-    } finally {
-      setBusy(false)
+  async function save(): Promise<void> {
+    const ids = new Set<string>()
+    for (const s of servers) {
+      if (!s.id.trim()) {
+        toast('error', 'server id 不能为空')
+        return
+      }
+      if (ids.has(s.id)) {
+        toast('error', `server id 重复: ${s.id}`)
+        return
+      }
+      ids.add(s.id)
     }
+    const r = await bridge.setSettings(servers)
+    if (r.ok) {
+      toast('success', '已保存（连接已重置，切回模块页自动重连）')
+    } else {
+      toast('error', r.error?.message ?? '保存失败')
+    }
+  }
+
+  if (!loaded) {
+    return <div className="settings-module">加载中…</div>
   }
 
   return (
-    <div className="settings-page">
-      <div className="settings-card">
-        <h3>exestarter CLI</h3>
-        <div className="settings-row">
-          <input
-            className="input"
-            value={exePath}
-            onChange={(e) => setExePath(e.target.value)}
-            placeholder="C:\path\to\exestarter.exe"
-            spellCheck={false}
-          />
-          <button className="btn" disabled={busy} onClick={() => void detect()}>
-            自动探测
-          </button>
-          <button
-            className="btn"
-            disabled={busy}
-            onClick={() => bridge.pickExe().then((p) => p && setExePath(p))}
-          >
-            浏览…
-          </button>
-        </div>
-        <div className="settings-hint">
-          探测顺序（dev）：显式配置 &gt; 开发目录（go_projects/exestarter）&gt; PATH；
-          <br />
-          探测顺序（打包后）：显式配置 &gt; tooldeck.exe 同级 bin 目录 &gt; PATH。
-          <br />
-          portable 分发时把 exestarter.exe 放进 bin\ 即可自动探测。
-        </div>
-        <div className="settings-row">
-          <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>
-            保存
-          </button>
-          <button
-            className="btn"
-            disabled={busy}
-            onClick={() => void refreshVersion(exePath.trim())}
-          >
-            查询版本
-          </button>
-          <span className="settings-hint">{version ? `CLI 版本: ${version}` : '版本未查询'}</span>
-        </div>
+    <div className="settings-module">
+      <h3>MCP server 连接</h3>
+      <p className="settings-hint">
+        每个 server 是一个支持 MCP stdio 的可执行文件（如 clictl.exe mcp）。
+        保存后配置即时生效；新增工具由「重新发现」自动出现，无需改前端。
+      </p>
+
+      {servers.map((s) => (
+        <fieldset key={s.id || `new-${servers.indexOf(s)}`} className="server-card">
+          <div className="server-row">
+            <label>
+              id
+              <input value={s.id} onChange={(e) => update(s.id, { id: e.target.value })} />
+            </label>
+            <label>
+              显示名
+              <input value={s.label} onChange={(e) => update(s.id, { label: e.target.value })} />
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={s.enabled}
+                onChange={(e) => update(s.id, { enabled: e.target.checked })}
+              />
+              启用
+            </label>
+          </div>
+          <div className="server-row">
+            <label className="grow">
+              可执行文件
+              <input
+                value={s.exePath}
+                placeholder="C:\path\to\clictl.exe"
+                onChange={(e) => update(s.id, { exePath: e.target.value })}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                void bridge
+                  .pickExe(s.exePath || undefined)
+                  .then((p) => p && update(s.id, { exePath: p }))
+              }
+            >
+              浏览…
+            </button>
+            <button type="button" className="btn" onClick={() => void autoDetect(s.id)}>
+              自动探测
+            </button>
+          </div>
+          <div className="server-row">
+            <label className="grow">
+              启动参数
+              <input
+                value={s.args.join(' ')}
+                placeholder="mcp"
+                onChange={(e) => update(s.id, { args: parseArgs(e.target.value) })}
+              />
+            </label>
+            <button type="button" className="btn btn-danger" onClick={() => removeServer(s.id)}>
+              移除
+            </button>
+          </div>
+        </fieldset>
+      ))}
+
+      <div className="settings-actions">
+        <button type="button" className="btn" onClick={() => addServer('clictl')}>
+          添加 clictl
+        </button>
+        <button type="button" className="btn" onClick={() => addServer('blank')}>
+          添加自定义 server
+        </button>
+        <button type="button" className="btn btn-primary" onClick={() => void save()}>
+          保存
+        </button>
       </div>
     </div>
   )

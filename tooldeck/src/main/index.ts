@@ -2,7 +2,7 @@ import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { setupSingleInstance } from './single-instance'
-import { registerIpc } from './ipc'
+import { registerIpc, shutdownMcp } from './ipc'
 import icon from '../../resources/icon.png?asset'
 
 function createWindow(): void {
@@ -62,4 +62,7 @@ if (!setupSingleInstance()) {
       app.quit()
     }
   })
+
+  // 退出前终止全部 MCP server 子进程，不留孤儿
+  app.on('before-quit', shutdownMcp)
 }

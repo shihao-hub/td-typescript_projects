@@ -1,22 +1,37 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ToastProvider } from './common/toast'
 import { ConfirmProvider } from './common/confirm'
-import { ExestarterModule } from './modules/exestarter/ExestarterModule'
-import { PendingModule } from './modules/pending/PendingModule'
+import { bridge } from './common/bridge'
+import type { ServerEntry } from './common/types'
+import { GenericModule } from './modules/generic/GenericModule'
 import { SettingsModule } from './modules/settings/SettingsModule'
 
-type ModuleId = 'exestarter' | 'filesync' | 'quickask' | 'zreadmanager' | 'settings'
+// 应用壳：左侧导航 = 已启用的 MCP server + 设置。
+// server 列表来自设置（动态），每个 server 进入通用模块（工具面板 / CRUD）。
 
-// 单应用多模块：左侧导航切换，exestarter 之外灰置待接入
-const MODULES: Array<{ id: ModuleId; name: string; available: boolean }> = [
-  { id: 'exestarter', name: 'exestarter', available: true },
-  { id: 'filesync', name: 'filesync', available: false },
-  { id: 'quickask', name: 'quickask', available: false },
-  { id: 'zreadmanager', name: 'zreadmanager', available: false }
-]
+export function App(): React.JSX.Element {
+  const [servers, setServers] = useState<ServerEntry[]>([])
+  const [active, setActive] = useState<string>('')
 
-function App(): React.JSX.Element {
-  const [active, setActive] = useState<ModuleId>('exestarter')
+  const loadServers = useCallback(async () => {
+    const list = await bridge.mcpServers()
+    setServers(list)
+    // 当前选中被禁用时回退到第一个可用 server
+    setActive((cur) => {
+      const stillOk = list.some((s) => s.id === cur && s.enabled)
+      if (stillOk) return cur
+      return list.find((s) => s.enabled)?.id ?? ''
+    })
+  }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 挂载时异步拉取 server 列表（setState 均在 await 之后）
+    void loadServers()
+    return bridge.onMcpStatus(() => void loadServers())
+  }, [loadServers])
+
+  const enabled = servers.filter((s) => s.enabled)
+  const activeServer = enabled.find((s) => s.id === active)
 
   return (
     <ToastProvider>
@@ -24,16 +39,25 @@ function App(): React.JSX.Element {
         <div className="app">
           <nav className="nav">
             <div className="nav-title">tooldeck</div>
-            {MODULES.map((m) => (
+            {enabled.map((s) => (
               <button
-                key={m.id}
-                className={`nav-item ${active === m.id ? 'active' : ''} ${m.available ? '' : 'pending'}`}
-                onClick={() => m.available && setActive(m.id)}
+                key={s.id}
+                className={`nav-item ${active === s.id ? 'active' : ''}`}
+                onClick={() => setActive(s.id)}
               >
-                {m.name}
-                {!m.available && <span className="nav-badge">待接入</span>}
+                {s.label}
+                <span
+                  className={`conn-dot inline ${s.state.state}`}
+                  title={s.state.message ?? ''}
+                />
               </button>
             ))}
+            {enabled.length === 0 && (
+              <button className="nav-item pending" onClick={() => setActive('settings')}>
+                暂无 server
+                <span className="nav-badge">去设置</span>
+              </button>
+            )}
             <div className="nav-spacer" />
             <button
               className={`nav-item ${active === 'settings' ? 'active' : ''}`}
@@ -43,13 +67,11 @@ function App(): React.JSX.Element {
             </button>
           </nav>
           <main className="main">
-            {active === 'exestarter' && (
-              <ExestarterModule onOpenSettings={() => setActive('settings')} />
+            {active === 'settings' || !activeServer ? (
+              <SettingsModule />
+            ) : (
+              <GenericModule key={activeServer.id} server={activeServer} />
             )}
-            {active === 'filesync' && <PendingModule name="filesync" />}
-            {active === 'quickask' && <PendingModule name="quickask" />}
-            {active === 'zreadmanager' && <PendingModule name="zreadmanager" />}
-            {active === 'settings' && <SettingsModule />}
           </main>
         </div>
       </ConfirmProvider>
