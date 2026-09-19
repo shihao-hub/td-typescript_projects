@@ -1,6 +1,6 @@
 # django-lab-react — django-lab 的 React SPA 前端
 
-> 同一个图书馆业务的两张脸：[django-lab](../python_projects/django-lab)（Django SSR + DRF API）负责数据与接口，本项目用 React 消费它的 `/api/`，演示「SSR 一体 → 前后端分离」的演进终点。
+> 同一个图书馆业务的两张脸：django-lab（`python_projects/django-lab`，Django SSR + DRF API）负责数据与接口，本项目用 React 消费它的 `/api/`，演示「SSR 一体 → 前后端分离」的演进终点。
 
 ## 快速开始
 
