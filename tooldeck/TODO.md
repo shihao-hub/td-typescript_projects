@@ -6,7 +6,7 @@
 
 ## 其余 CLI 的 MCP 化接入
 
-按父仓 `docs/go_projects/clictl/MCP 接口文档.md` 迁移矩阵逐个接入（各自出计划）：
+按父仓 `docs/projects/go_projects/clictl/MCP 接口文档.md` 迁移矩阵逐个接入（各自出计划）：
 
 - exestarter：补 `mcp` 子命令（复用 clictl 的 internal/mcp 模式）后零前端接入
 - filesync：run 是长任务（同步可能跑数分钟），MCP 化时需要进度事件（tools/call 进度通知或 task 流）

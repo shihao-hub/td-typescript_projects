@@ -11,7 +11,7 @@
 | MCP server，工具带 inputSchema | 自动发现 + 动态参数表单（RJSF + cfworker 校验器，无 eval、兼容 CSP）+ 点击执行 + 取消 |
 | 工具返回 structuredContent | 动态结果渲染：对象数组默认表格、其余默认树形（展开/收起、类型着色、计数摘要、长文本截断、复制 JSON），可手动切换 表格/树形/原始 JSON |
 
-首个接入样本：**clictl**（`clictl.exe mcp`，注册/启动/记账，10 个 MCP 工具）；exestarter 等其余 CLI 待各自 MCP 化后接入（见父仓 `docs/go_projects/clictl/MCP 接口文档.md` 迁移矩阵）。
+首个接入样本：**clictl**（`clictl.exe mcp`，注册/启动/记账，10 个 MCP 工具）；exestarter 等其余 CLI 待各自 MCP 化后接入（见父仓 `docs/projects/go_projects/clictl/MCP 接口文档.md` 迁移矩阵）。
 
 ## 命令
 
