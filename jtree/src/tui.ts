@@ -6,9 +6,10 @@
  * - 非纯：openKeys（键源分层探测）与 runTui（终端生命周期 + 事件循环）。
  * - 键源分层（互斥，绝不并存——双读者会瓜分同一控制台输入）：
  *   1) stdin 本身是 TTY → process.stdin raw mode；
- *   2) Windows 且 stdin 被管道占用 → \\.\CONIN$ 以 r+ 打开（setRawMode 需要写权限）
- *      + tty.ReadStream；Bun 等运行时构造成功但 raw 不可用，在此降级；
- *   3) 全部失败 → runTui 返回 false，由调用方降级纯打印。
+ *   2) Windows + Bun 且 stdin 被管道占用 → Win32 设置 CONIN$ raw mode，
+ *      字节流交给 OpenTUI StdinParser/KeyHandler；
+ *   3) Windows + Node 且 stdin 被管道占用 → \\.\CONIN$ + tty.ReadStream；
+ *   4) 全部失败 → runTui 返回 false，由调用方降级纯打印。
  * - 数据静态：无定时器，仅在 keypress / resize 事件里重绘。
  */
 
@@ -146,14 +147,170 @@ interface KeySource {
   close(): void;
 }
 
+/** Bun FFI 的最小类型面；这里只需要 kernel32 的 console I/O 入口。 */
+interface BunFfi {
+  ptr(value: ArrayBufferView): number;
+  dlopen(
+    path: string,
+    symbols: Record<string, { args?: string[]; returns?: string }>,
+  ): {
+    symbols: {
+      CreateFileW(...args: unknown[]): bigint;
+      GetConsoleMode(handle: bigint | number, mode: Uint32Array): number;
+      SetConsoleMode(handle: bigint | number, mode: number): number;
+      CloseHandle(handle: bigint): number;
+    };
+    close(): void;
+  };
+}
+
+interface RawConsoleHandle {
+  previousMode: number;
+  close(): void;
+}
+
+const WINDOWS_RAW_INPUT_MODE = 0x0008; // ENABLE_WINDOW_INPUT
+const INVALID_WINDOWS_HANDLE = 0xffff_ffff_ffff_ffffn;
+
+/** OpenTUI 负责按键协议解析；这里只解决 Bun 下 CONIN$ 的 raw mode。 */
+function enableRawConsoleInput(): RawConsoleHandle | undefined {
+  const ffi = (globalThis as { Bun?: { FFI?: BunFfi } }).Bun?.FFI;
+  if (!ffi) return undefined;
+
+  const kernel32 = ffi.dlopen("kernel32.dll", {
+    CreateFileW: {
+      args: ["ptr", "u32", "u32", "ptr", "u32", "u32", "ptr"],
+      returns: "ptr",
+    },
+    GetConsoleMode: { args: ["ptr", "ptr"], returns: "i32" },
+    SetConsoleMode: { args: ["ptr", "u32"], returns: "i32" },
+    CloseHandle: { args: ["ptr"], returns: "i32" },
+  });
+
+  const devicePath = "//./CONIN$";
+  const widePath = new Uint16Array(devicePath.length + 1);
+  for (let i = 0; i < devicePath.length; i += 1) {
+    widePath[i] = devicePath.charCodeAt(i);
+  }
+
+  const handle = kernel32.symbols.CreateFileW(
+    ffi.ptr(widePath),
+    0xc0000000, // GENERIC_READ | GENERIC_WRITE
+    0x00000003, // FILE_SHARE_READ | FILE_SHARE_WRITE
+    0,
+    0x00000003, // OPEN_EXISTING
+    0,
+    0,
+  );
+  if (handle === 0n || handle === INVALID_WINDOWS_HANDLE) return undefined;
+
+  const mode = new Uint32Array(1);
+  if (kernel32.symbols.GetConsoleMode(handle, mode) === 0) {
+    kernel32.symbols.CloseHandle(handle);
+    return undefined;
+  }
+  const previousMode = mode[0] ?? 0;
+  if (kernel32.symbols.SetConsoleMode(handle, WINDOWS_RAW_INPUT_MODE) === 0) {
+    kernel32.symbols.CloseHandle(handle);
+    return undefined;
+  }
+
+  return {
+    previousMode,
+    close() {
+      kernel32.symbols.SetConsoleMode(handle, previousMode);
+      kernel32.symbols.CloseHandle(handle);
+    },
+  };
+}
+
+interface OpenTuiKeyParser {
+  push(data: Uint8Array): void;
+  drain(onEvent: (event: unknown) => void): void;
+  destroy(): void;
+}
+
+interface OpenTuiKeyHandler {
+  on(event: "keypress", listener: (key: unknown) => void): void;
+  processParsedKey(key: unknown): boolean;
+}
+
+/** Bun + 管道 stdin：raw mode 用 Win32，按键协议解析交给 OpenTUI。 */
+async function openOpenTuiWindowsKeys(): Promise<KeySource | undefined> {
+  const consoleHandle = enableRawConsoleInput();
+  if (!consoleHandle) return undefined;
+
+  let fd: number | undefined;
+  try {
+    const { StdinParser, KeyHandler } = await import("@opentui/core");
+    let drainKeys: (() => void) | undefined;
+    const parser = new StdinParser({
+      armTimeouts: true,
+      onTimeoutFlush: () => drainKeys?.(),
+    }) as unknown as OpenTuiKeyParser;
+    const keyHandler = new KeyHandler() as unknown as OpenTuiKeyHandler;
+
+    let keyListener: ((key: KeyDescriptor) => void) | undefined;
+    keyHandler.on("keypress", (key) => keyListener?.(key as KeyDescriptor));
+    drainKeys = (): void => {
+      parser.drain((event) => {
+        const { type, key } = event as {
+          type?: string;
+          key?: KeyDescriptor & { eventType?: string };
+        };
+        if (type === "key" && key?.eventType !== "release") {
+          keyHandler.processParsedKey(key);
+        }
+      });
+    };
+
+    fd = fs.openSync("//./CONIN$", "r+");
+    const conin = new tty.ReadStream(fd);
+    const onData = (chunk: Buffer | string): void => {
+      parser.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      drainKeys();
+    };
+    conin.on("data", onData);
+    conin.unref();
+
+    let closed = false;
+    return {
+      onKey(callback) {
+        keyListener = callback;
+      },
+      close() {
+        if (closed) return;
+        closed = true;
+        conin.off("data", onData);
+        conin.destroy();
+        try {
+          if (fd !== undefined) fs.closeSync(fd);
+        } catch {
+          /* fd 已由流关闭或进程退出时由系统回收 */
+        }
+        parser.destroy();
+        consoleHandle.close();
+      },
+    };
+  } catch {
+    try {
+      if (fd !== undefined) fs.closeSync(fd);
+    } catch {
+      /* fd 可能尚未成功打开 */
+    }
+    consoleHandle.close();
+    return undefined;
+  }
+}
+
 /**
  * 键源分层探测（互斥取一）：
  * 1) stdin 是 TTY → process.stdin；
- * 2) Windows 管道 stdin → \\.\CONIN$ r+ + tty.ReadStream（真调一次 setRawMode 验证，
- *    Bun 等运行时会构造成功但 raw 不可用）；
- * 3) 失败 → undefined（调用方降级纯打印）。
+ * 2) Windows + Bun 管道 stdin → Win32 raw mode + OpenTUI parser；
+ * 3) Windows + Node 管道 stdin → \\.\CONIN$ r+ + tty.ReadStream；
+ * 4) 失败 → undefined（调用方降级纯打印）。
  */
-function openKeys(): KeySource | undefined {
+async function openKeys(): Promise<KeySource | undefined> {
   // 1) stdin 本身是 TTY（数据不经管道进入的场景）
   if (process.stdin.isTTY) {
     const stdin = process.stdin;
@@ -178,7 +335,13 @@ function openKeys(): KeySource | undefined {
     };
   }
 
-  // 2) Windows：stdin 被管道占用时直接开控制台输入设备
+  // 2) Windows + Bun：OpenTUI 解析 CONIN$，绕过 Bun tty.ReadStream raw mode 限制
+  if (process.platform === 'win32' && 'bun' in process.versions) {
+    const keys = await openOpenTuiWindowsKeys();
+    if (keys) return keys;
+  }
+
+  // 3) Windows + Node：stdin 被管道占用时直接开控制台输入设备
   if (process.platform === 'win32') {
     try {
       // r+ 读写权限：setRawMode 需要控制台输入缓冲区写权限（只读会 EPERM）
@@ -215,8 +378,8 @@ function openKeys(): KeySource | undefined {
  * 进入交互模式。返回 false 表示无可用键源（未进备用屏），调用方降级纯打印；
  * 正常路径由按键驱动，q/Ctrl+C 时内部恢复终端并 exit(0)。
  */
-export function runTui(value: unknown): boolean {
-  const keys = openKeys();
+export async function runTui(value: unknown): Promise<boolean> {
+  const keys = await openKeys();
   if (!keys) return false;
   const { stdout } = process;
 

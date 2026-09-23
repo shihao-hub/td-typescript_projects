@@ -25,7 +25,7 @@ jtree -h / -v                  # 帮助 / 版本
 | `a` | 全收起 ↔ 全展开 |
 | `q`/`Ctrl+C` | 退出（退出码 0） |
 
-键盘输入来源：stdin 为终端时直接读 stdin；stdin 被管道占用（`命令 | jtree` 主场景）时在 Windows 上直接打开控制台输入设备 `\\.\CONIN$` 读取。当前运行时限制：**Bun 打包的 exe 在管道输入下暂无法进入交互模式**（Bun 的 `tty.ReadStream` 不支持该路径的 raw mode），会自动降级纯打印并提示；Node 运行时（`pnpm dev` / `node dist/main.js`）交互完整可用，待 Bun 上游修复后 exe 自动跟进。
+键盘输入来源：stdin 为终端时直接读 stdin；stdin 被管道占用（`命令 | jtree` 主场景）时在 Windows 上打开控制台输入设备 `\\.\CONIN$` 读取。Node 运行时走 `tty.ReadStream`；Bun 打包 exe 通过 Win32 API 启用 raw mode，并用 OpenTUI 的 `StdinParser` / `KeyHandler` 解析按键。
 
 ## 渲染规则
 
@@ -65,4 +65,3 @@ pnpm add --global .   # 全局安装 jtree 命令（链接到本目录，改源�
 ```
 
 版本号有两处需同步修改：`package.json` 的 `version` 与 `src/main.ts` 的 `VERSION` 常量（后者因 rootDir 限制无法 import 前者）。
-

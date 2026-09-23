@@ -21,6 +21,7 @@
     "dist"
   ],
   "dependencies": {
+    "@opentui/core": "^0.5.12",
     "chalk": "^5.4.1"
   },
   "devDependencies": {

@@ -98,7 +98,7 @@ async function main(): Promise<void> {
 
   // stdout 为终端且未指定 -p → 交互模式；键源不可用时降级纯打印
   if (process.stdout.isTTY && !flags.print) {
-    if (runTui(value)) return;
+    if (await runTui(value)) return;
     process.stderr.write('提示：当前环境无法读取键盘输入，已按纯打印输出（可用 -p 显式跳过交互）\n');
   }
 
