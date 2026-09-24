@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ANSI_RE, displayWidth } from '../format.js';
 import { collectExpandableIds, flattenTree } from '../flatten.js';
 import { formatRow } from '../render.js';
-import { applyKey, buildFrame, buildStatusLine, type TuiState } from '../tui.js';
+import { applyKey, buildFrame, buildStatusLine, isCopyRequested, shouldQuitFromCopy, shouldReturnFromCopy, type TuiState } from '../tui.js';
 
 const strip = (s: string): string => s.replace(ANSI_RE, '');
 
@@ -162,6 +162,20 @@ describe('applyKey', () => {
     expect(st.expanded.size).toBe(0);
     const st2 = applyKey(state({ cursor: 0, expanded: new Set<string>() }), { sequence: 'a' }, ctx);
     expect(st2.expanded).toEqual(new Set(all));
+  });
+
+  it('c 进入 copy view；修饰键不触发', () => {
+    expect(isCopyRequested({ name: 'c', sequence: 'c' })).toBe(true);
+    expect(isCopyRequested({ name: 'c', ctrl: true })).toBe(false);
+    const before = state({ cursor: 2 });
+    expect(applyKey(before, { name: 'c' }, ctx)).toEqual(before);
+  });
+
+  it('copy view 的 Enter 返回；q 直接退出', () => {
+    expect(shouldReturnFromCopy({ name: 'enter' })).toBe(true);
+    expect(shouldReturnFromCopy({ name: 'q', sequence: 'q' })).toBe(false);
+    expect(shouldQuitFromCopy({ name: 'q', sequence: 'q' })).toBe(true);
+    expect(shouldQuitFromCopy({ name: 'q', sequence: '\x11', ctrl: true })).toBe(false);
   });
 
   it('q 与 Ctrl+C 置 quit；quit 后忽略按键', () => {

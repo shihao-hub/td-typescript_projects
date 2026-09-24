@@ -148,3 +148,43 @@ export function collectExpandableIds(value: unknown): Set<string> {
   visit(value, '');
   return ids;
 }
+
+/** 按 RFC 6901 反解 JSON Pointer 分段（~0 → ~，~1 → /） */
+function unesc(token: string): string {
+  return token.replace(/~1/g, '/').replace(/~0/g, '~');
+}
+
+/** 按 jtree 行 id（RFC 6901 JSON Pointer）取子树；'' 表示整个 root */
+export function getValueAtPointer(root: unknown, pointer: string): unknown {
+  if (pointer === '') return root;
+
+  let current: unknown = root;
+  for (const escaped of pointer.split('/').slice(1)) {
+    const token = unesc(escaped);
+    if (Array.isArray(current)) {
+      if (!/^\d+$/.test(token)) return undefined;
+      current = current[Number(token)];
+    } else if (current !== null && typeof current === 'object') {
+      current = (current as Record<string, unknown>)[token];
+    } else {
+      return undefined;
+    }
+  }
+  return current;
+}
+
+/**
+ * 取子树并保留末级 key / 数组下标，供 copy view 渲染 `name: value`、`[0]: value`。
+ * 根指针没有末级行标签，直接返回 root。
+ */
+export function getWrappedValueAtPointer(root: unknown, pointer: string): unknown {
+  if (pointer === '') return root;
+
+  const lastSlash = pointer.lastIndexOf('/');
+  const escaped = pointer.slice(lastSlash + 1);
+  const key = unesc(escaped);
+  const parent = getValueAtPointer(root, pointer.slice(0, lastSlash));
+  const value = getValueAtPointer(root, pointer);
+
+  return Array.isArray(parent) ? [value] : { [key]: value };
+}

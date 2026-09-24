@@ -18,8 +18,8 @@ import * as readline from 'node:readline';
 import * as tty from 'node:tty';
 import chalk from 'chalk';
 import { clipToWidth, padEndWidth } from './format.js';
-import { collectExpandableIds, flattenTree, type FlatRow } from './flatten.js';
-import { formatRow } from './render.js';
+import { collectExpandableIds, flattenTree, getWrappedValueAtPointer, type FlatRow } from './flatten.js';
+import { formatRow, render } from './render.js';
 
 /** readline keypress 事件的 key 对象子集 */
 export interface KeyDescriptor {
@@ -64,7 +64,7 @@ export function buildStatusLine(width: number, info: { total: number; offset: nu
   if (above > 0) left += ` ↑${above}`;
   left += ` · ${pos}`;
   if (below > 0) left += ` ↓${below}`;
-  const hint = ' │ ↑↓ 滚动 · ←→/Enter 折叠 · a 全收起 · q 退出';
+  const hint = ' │ ↑↓ 滚动 · ←→/Enter 折叠 · c 复制视图 · a 全收起 · q 退出';
   return chalk.dim(clipToWidth(left + hint, width));
 }
 
@@ -141,6 +141,23 @@ export function applyKey(st: TuiState, key: KeyDescriptor, ctx: KeyContext): Tui
   return st;
 }
 
+/** 按键是否请求进入 copy view（主 TUI 使用；copy view 自身的返回键另判） */
+export function isCopyRequested(key: KeyDescriptor): boolean {
+  const plain = !key.ctrl && !key.meta;
+  return plain && (key.name === 'c' || key.sequence === 'c');
+}
+
+/** copy view 中按 Enter 返回 TUI */
+export function shouldReturnFromCopy(key: KeyDescriptor): boolean {
+  return key.name === 'enter' || key.name === 'return';
+}
+
+/** copy view 中按 q 直接退出 jtree，回到 shell 继续执行后续命令 */
+export function shouldQuitFromCopy(key: KeyDescriptor): boolean {
+  const plain = !key.ctrl && !key.meta;
+  return plain && (key.name === 'q' || key.sequence === 'q');
+}
+
 /** 键源：统一的按键回调 + 关闭（恢复 raw 模式并释放流/fd） */
 interface KeySource {
   onKey(cb: (key: KeyDescriptor) => void): void;
@@ -169,7 +186,7 @@ interface RawConsoleHandle {
   close(): void;
 }
 
-const WINDOWS_RAW_INPUT_MODE = 0x0008; // ENABLE_WINDOW_INPUT
+const WINDOWS_RAW_INPUT_MODE = 0x0208; // ENABLE_WINDOW_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT
 const INVALID_WINDOWS_HANDLE = 0xffff_ffff_ffff_ffffn;
 
 /** OpenTUI 负责按键协议解析；这里只解决 Bun 下 CONIN$ 的 raw mode。 */
@@ -407,13 +424,61 @@ export async function runTui(value: unknown): Promise<boolean> {
       /* 已恢复 */
     }
   };
+  const enter = (): void => {
+    stdout.write('\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l');
+    draw();
+  };
+
+  /**
+   * copy view：退回主屏打印当前选中子树，用终端原生选择复制。
+   * 键源保持不变；q/Enter 回到备用屏，光标与展开状态继续沿用。
+   */
+  const showCopyView = async (): Promise<void> => {
+    const current = rows[st.cursor];
+    const pointer = current?.id ?? '';
+    const subtree = getWrappedValueAtPointer(value, pointer);
+    const pathLabel = pointer === '' ? '(root)' : pointer;
+
+    stdout.write('\x1b[?1049l');
+    stdout.write(`jtree copy view: ${pathLabel}\n`);
+    stdout.write('jtree: press Enter to return, or q to exit\n');
+    stdout.write('\n');
+    stdout.write(render(subtree, { truncate: false }).join('\n') + '\n');
+
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      keys.onKey((key) => {
+        if (settled) return;
+        if (key.ctrl && key.name === 'c') {
+          settled = true;
+          quit(130);
+          return;
+        }
+        if (shouldQuitFromCopy(key)) {
+          settled = true;
+          quit();
+          return;
+        }
+        if (shouldReturnFromCopy(key)) {
+          settled = true;
+          enter();
+          keys.onKey(tuiHandler);
+          resolve();
+        }
+      });
+    });
+  };
   const quit = (code = 0): void => {
     keys.close();
     restore();
     process.exit(code);
   };
 
-  keys.onKey((key) => {
+  const tuiHandler = (key: KeyDescriptor): void => {
+    if (isCopyRequested(key)) {
+      void showCopyView();
+      return;
+    }
     st = applyKey(st, key, { rows, allExpandable, bodyRows: bodyRows() });
     if (st.quit) {
       quit();
@@ -423,7 +488,8 @@ export async function runTui(value: unknown): Promise<boolean> {
     rows = flattenTree(value, { expanded: st.expanded });
     st.cursor = Math.min(st.cursor, Math.max(0, rows.length - 1));
     draw();
-  });
+  };
+  keys.onKey(tuiHandler);
 
   process.on('SIGINT', () => quit(130)); // 非 raw 模式兜底
   process.on('exit', restore); // 异常退出双保险（幂等）

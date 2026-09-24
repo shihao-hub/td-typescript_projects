@@ -75,6 +75,17 @@ describe('render 截断', () => {
   });
 });
 
+describe('render truncate:false', () => {
+  it('copy view 不因终端宽度截断长字符串', () => {
+    const value = { path: 'x'.repeat(100) };
+    expect(render(value, { width: 20, truncate: false })).toEqual([`└─ path: "${'x'.repeat(100)}"`]);
+  });
+
+  it('根原始值也不因终端宽度截断', () => {
+    expect(render('x'.repeat(100), { width: 20, truncate: false })).toEqual([`"${'x'.repeat(100)}"`]);
+  });
+});
+
 describe('render CJK 截断（显示宽度感知）', () => {
   it('长中文串窄宽下按显示宽度截断且行宽不超限', () => {
     const lines = render({ desc: '中文宽度测试'.repeat(4) }, { width: 20 });

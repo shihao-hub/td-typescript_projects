@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectExpandableIds, flattenTree } from '../flatten.js';
+import { collectExpandableIds, flattenTree, getValueAtPointer, getWrappedValueAtPointer } from '../flatten.js';
 
 describe('flattenTree 全展开（缺省）', () => {
   it('行结构与 render 纯打印一致：前缀/深度/末项', () => {
@@ -84,5 +84,55 @@ describe('collectExpandableIds', () => {
     expect(collectExpandableIds('x')).toEqual(new Set());
     expect(collectExpandableIds({})).toEqual(new Set());
     expect(collectExpandableIds([])).toEqual(new Set());
+  });
+});
+
+describe('getValueAtPointer', () => {
+  const value = {
+    data: [{ id: 1, tags: ['a'] }, { id: 2 }],
+    'a/b': 'slash',
+    '~x': 'tilde',
+  };
+
+  it('空指针返回整个 root', () => {
+    expect(getValueAtPointer(value, '')).toBe(value);
+  });
+
+  it('对象、数组元素与嵌套字段', () => {
+    expect(getValueAtPointer(value, '/data')).toEqual(value.data);
+    expect(getValueAtPointer(value, '/data/0')).toEqual(value.data[0]);
+    expect(getValueAtPointer(value, '/data/0/id')).toBe(1);
+  });
+
+  it('解码 JSON Pointer 的 ~0 与 ~1', () => {
+    expect(getValueAtPointer(value, '/a~1b')).toBe('slash');
+    expect(getValueAtPointer(value, '/~0x')).toBe('tilde');
+  });
+
+  it('越界、非法数组下标与基础值后缀返回 undefined', () => {
+    expect(getValueAtPointer(value, '/data/9')).toBeUndefined();
+    expect(getValueAtPointer(value, '/data/x')).toBeUndefined();
+    expect(getValueAtPointer(value, '/data/0/id/x')).toBeUndefined();
+  });
+});
+
+describe('getWrappedValueAtPointer', () => {
+  const value = { data: [{ id: 1, name: 'zedhub' }], 'a/b': true };
+
+  it('根指针直接返回原值', () => {
+    expect(getWrappedValueAtPointer(value, '')).toBe(value);
+  });
+
+  it('对象子树保留 key，叶子保留 key-value', () => {
+    expect(getWrappedValueAtPointer(value, '/data')).toEqual({ data: value.data });
+    expect(getWrappedValueAtPointer(value, '/data/0/name')).toEqual({ name: 'zedhub' });
+  });
+
+  it('数组元素包装为数组，copy view 渲染为 [0]:', () => {
+    expect(getWrappedValueAtPointer(value, '/data/0')).toEqual([value.data[0]]);
+  });
+
+  it('解码末级 JSON Pointer key', () => {
+    expect(getWrappedValueAtPointer(value, '/a~1b')).toEqual({ 'a/b': true });
   });
 });

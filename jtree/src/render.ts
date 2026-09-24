@@ -14,6 +14,8 @@ import { flattenTree, type FlatRow } from './flatten.js';
 export interface RenderOptions {
   /** 终端宽度上限，超出的单行截断；默认 120 */
   width?: number;
+  /** true 时复制视图/外部输出不因宽度截断长值；默认 false */
+  truncate?: boolean;
 }
 
 export interface FormatOptions {
@@ -23,6 +25,8 @@ export interface FormatOptions {
   indicators?: boolean;
   /** false 时输出零 ANSI（选中行反色底稿用）；默认 true */
   colored?: boolean;
+  /** false 时不因宽度截断长值（copy view 使用）；默认 true */
+  truncate?: boolean;
 }
 
 const DEFAULT_WIDTH = 120;
@@ -44,7 +48,7 @@ const plainPainter: Painter = {
 function primitiveText(v: unknown, budget: number, c: Painter): string {
   if (typeof v === 'string') {
     let s = JSON.stringify(v);
-    if (displayWidth(s) > budget) {
+    if (budget < Number.MAX_SAFE_INTEGER && displayWidth(s) > budget) {
       // 预留闭引号宽度，截断后补上保持视觉完整
       s = clipToWidth(s, budget - 1);
       if (!s.endsWith('"')) s += '"';
@@ -71,10 +75,14 @@ export function formatRow(row: FlatRow, opts: FormatOptions): string {
   if (row.placeholder !== undefined) return head + label + ' ' + c.dim(row.placeholder);
   if (row.leafValue !== undefined) {
     // 根原始值行无前缀与标签，直接输出值
-    if (row.depth === 0) return primitiveText(row.leafValue, opts.width, c);
+    if (row.depth === 0) {
+      return primitiveText(row.leafValue, opts.truncate === false ? Number.MAX_SAFE_INTEGER : opts.width, c);
+    }
     // v0.2.0 历史预算口径：entry 行扣 2（key: + 空格）、element 行扣 5-len(i)（[i] + 空格），
     // 统一为 -1-(labelDim?2:0)，纯 ASCII 下逐字节等价；中文等宽字符按显示列数计
-    const budget = opts.width - displayWidth(head + row.label) - 1 - (row.labelDim ? 2 : 0);
+    const budget = opts.truncate === false
+      ? Number.MAX_SAFE_INTEGER
+      : opts.width - displayWidth(head + row.label) - 1 - (row.labelDim ? 2 : 0);
     return head + label + ' ' + primitiveText(row.leafValue, budget, c);
   }
   const ind = opts.indicators && row.expandable ? ' ' + c.dim(row.expanded ? '▾' : '▸') : '';
@@ -94,5 +102,8 @@ export function formatRows(rows: readonly FlatRow[], opts: FormatOptions): strin
  * - 颜色：树符号/计数/[i]/bool/null 灰，字符串绿，数字黄；非 TTY 或 NO_COLOR 自动无色
  */
 export function render(value: unknown, opts: RenderOptions = {}): string[] {
-  return formatRows(flattenTree(value), { width: opts.width ?? DEFAULT_WIDTH });
+  return formatRows(flattenTree(value), {
+    width: opts.width ?? DEFAULT_WIDTH,
+    truncate: opts.truncate,
+  });
 }
