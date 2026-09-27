@@ -1,14 +1,14 @@
-// render.mjs —— 离线确定性出片流水线
+// render.ts —— 离线确定性出片流水线
 // 流程：起本地静态服务 → Playwright 驱动本机 Chrome → 逐帧 __renderFrame(t) + 截图
 //       → ffmpeg 编码 MP4。帧缓存按仓库约束放 %APPDATA%\language_projects\cli-json-reel\。
 //
-// 用法：
-//   node scripts/render.mjs                     # 全量渲染 + 编码
-//   node scripts/render.mjs --limit 60          # 只渲前 60 帧（试管线）
-//   node scripts/render.mjs --verify            # 确定性校验：抽帧渲染两次比对
-//   node scripts/render.mjs --no-encode         # 只出帧不编码
-//   node scripts/render.mjs --keep-frames       # 编码后保留帧缓存
-//   node scripts/render.mjs --preview           # 起服务并打开浏览器实时预览
+// 用法（用 Bun 运行，TS 直跑）：
+//   bun scripts/render.ts                     # 全量渲染 + 编码
+//   bun scripts/render.ts --limit 60          # 只渲前 60 帧（试管线）
+//   bun scripts/render.ts --verify            # 确定性校验：抽帧渲染两次比对
+//   bun scripts/render.ts --no-encode         # 只出帧不编码
+//   bun scripts/render.ts --keep-frames       # 编码后保留帧缓存
+//   bun scripts/render.ts --preview           # 起服务并打开浏览器实时预览
 
 import { chromium } from "playwright-core";
 import http from "node:http";
@@ -23,12 +23,12 @@ const OUTPUT_DIR = path.join(ROOT, "output");
 const VIDEO_PATH = path.join(OUTPUT_DIR, "cli-json-reel.mp4");
 
 // ---------- 参数解析（--key value / 布尔 flag） ----------
-const args = process.argv.slice(2);
-const getArg = (name, def = undefined) => {
+const args: string[] = process.argv.slice(2);
+const getArg = (name: string, def?: string): string | undefined => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : def;
 };
-const hasFlag = (name) => args.includes(`--${name}`);
+const hasFlag = (name: string): boolean => args.includes(`--${name}`);
 
 const FPS = Number(getArg("fps", 60));
 const WIDTH = Number(getArg("width", 1920));
@@ -56,7 +56,7 @@ const MIME = {
   ".woff2": "font/woff2",
 };
 
-function serve(root) {
+function serve(root: string): Promise<import("node:http").Server> {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       const urlPath = decodeURIComponent(new URL(req.url, "http://x").pathname);
@@ -93,7 +93,7 @@ async function launchBrowser() {
   return chromium.launch({ headless: true });
 }
 
-const log = (msg) => {
+const log = (msg: string) => {
   const d = new Date();
   const ts = `${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
   console.log(`[${ts}] ${msg}`);
@@ -130,7 +130,7 @@ async function main() {
   const totalFrames = Math.min(Math.floor(duration * fps), LIMIT);
   log(`规格：${WIDTH}x${HEIGHT} @ ${fps}fps，共 ${totalFrames} 帧（${duration}s）`);
 
-  const renderAt = async (frameIndex) => {
+  const renderAt = async (frameIndex: number): Promise<Buffer> => {
     const t = frameIndex / fps;
     await page.evaluate((tt) => window.__renderFrame(tt), t);
     return page.screenshot({

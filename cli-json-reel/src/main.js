@@ -1,5 +1,5 @@
 // main.js —— 编排入口：window.__renderFrame(t) 纯函数帧接口
-// 渲染脚本（scripts/render.mjs）按 t = frame / FPS 显式驱动，不依赖任何时钟。
+// 渲染脚本（scripts/render.ts）按 t = frame / FPS 显式驱动，不依赖任何时钟。
 
 import { THEME } from "./core.js";
 import { WIDTH, HEIGHT, DURATION, FPS, sceneAt } from "./time.js";

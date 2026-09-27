@@ -5,9 +5,9 @@
   "type": "module",
   "description": "CLI + JSON 输出模式：极简排版动画演示视频（纯 Canvas2D，确定性离线渲染）",
   "scripts": {
-    "render": "node scripts/render.mjs",
-    "verify": "node scripts/render.mjs --verify --limit 6 --no-encode --keep-frames",
-    "preview": "node scripts/render.mjs --preview"
+    "render": "bun scripts/render.ts",
+    "verify": "bun scripts/render.ts --verify --limit 6 --no-encode --keep-frames",
+    "preview": "bun scripts/render.ts --preview"
   },
   "devDependencies": {
     "playwright-core": "^1.49.0"

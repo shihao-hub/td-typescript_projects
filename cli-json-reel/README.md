@@ -13,8 +13,8 @@ pnpm render               # 全量渲染 1800 帧 + ffmpeg 编码 → output/cli
 pnpm verify               # 确定性校验：抽帧渲染两次逐字节比对
 pnpm preview              # 起本地服务，浏览器实时预览（?play=1 循环播放）
 
-node scripts/render.mjs --stills "150,450,780"   # 只渲指定帧号供人工检查
-node scripts/render.mjs --limit 60 --no-encode   # 试跑前 60 帧不编码
+bun scripts/render.ts --stills "150,450,780"   # 只渲指定帧号供人工检查
+bun scripts/render.ts --limit 60 --no-encode   # 试跑前 60 帧不编码
 ```
 
 ## 确定性
@@ -31,7 +31,7 @@ src/core.js           数学 / 缓动 / 主题 / Canvas2D 绘制工具
 src/time.js           唯一时间真相：规格 + 镜头窗口表
 src/scenes.js         五个镜头的绘制函数（纯函数）
 src/main.js           renderFrame(t) 编排 + 预览模式
-scripts/render.mjs    离线出片：静态服务 + Playwright 逐帧截图 + ffmpeg 编码
+scripts/render.ts    离线出片：静态服务 + Playwright 逐帧截图 + ffmpeg 编码
 output/               成品视频（gitignore）
 ```
 
