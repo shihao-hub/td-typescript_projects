@@ -23,8 +23,8 @@ pnpm lint        # eslint
 pnpm dist        # 构建并打包 portable（产物在 dist/）
 ```
 
-首次配置（修中文日志乱码）：`.\scripts\add-utf8-profile.ps1` 向 PowerShell profile 写入
-`[Console]::OutputEncoding = UTF8`（幂等，可用 `.\scripts\remove-utf8-profile.ps1` 移除），
+首次配置（修中文日志乱码）：`bun scripts/add-utf8-profile.ts` 向 PowerShell profile 写入
+`[Console]::OutputEncoding = UTF8`（幂等，可用 `bun scripts/remove-utf8-profile.ts` 移除），
 新开会话生效——PS 5.1 下 `chcp 65001` 刷不动该设置，必须走 profile。
 
 ## server 接入
