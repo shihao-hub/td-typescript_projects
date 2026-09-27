@@ -1,0 +1,9 @@
+{
+    "name": "com.gemini.launcher",
+    "description": "Chrome Native Messaging Host for Gemini Launcher",
+    "path": "D:\\Users\\language_projects\\typescript_projects\\gemini-launcher\\host\\gemini_host.exe",
+    "type": "stdio",
+    "allowed_origins": [
+        "chrome-extension://bgnokdanmgeniekciaokdakhnmmienim/"
+    ]
+}

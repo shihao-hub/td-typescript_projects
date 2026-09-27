@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Launcher",
+  "version": "1.0.0",
+  "description": "Minimal single-icon trigger for Chrome native Gemini assistant",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "Gemini"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "128": "icons/icon128.png"
+  }
+}
