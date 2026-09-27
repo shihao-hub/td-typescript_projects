@@ -10,8 +10,8 @@
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
     "postinstall": "wxt prepare",
-    "load": "wxt build && node scripts/load-into-chrome.mjs",
-    "load:dev": "node scripts/load-into-chrome.mjs .output/chrome-mv3-dev"
+    "load": "wxt build && bun scripts/load-into-chrome.ts",
+    "load:dev": "bun scripts/load-into-chrome.ts .output/chrome-mv3-dev"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

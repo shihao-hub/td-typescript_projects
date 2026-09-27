@@ -1,7 +1,6 @@
-#!/usr/bin/env node
 // 通过 CDP Extensions.loadUnpacked 把构建产物加载进本机 Chrome。
-// 用法:
-//   node scripts/load-into-chrome.mjs [扩展目录] [--port=9222] [--restart-chrome] [--no-open]
+// 用法（用 Bun 运行，TS 直跑）：
+//   bun scripts/load-into-chrome.ts [扩展目录] [--port=9222] [--restart-chrome] [--no-open]
 // 扩展目录默认 .output/chrome-mv3（生产构建）。
 
 import { spawn } from 'node:child_process';
@@ -9,13 +8,13 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
 
-const args = process.argv.slice(2);
-const flags = args.filter((a) => a.startsWith('--'));
-const positional = args.filter((a) => !a.startsWith('--'));
-const extDir = resolve(positional[0] ?? '.output/chrome-mv3'); // 没有这个参数就注入稳定版本
-const port = Number(flags.find((f) => f.startsWith('--port='))?.slice(7) || 9222);
-const restartChrome = flags.includes('--restart-chrome');
-const noOpen = flags.includes('--no-open');
+const args: string[] = process.argv.slice(2);
+const flags: string[] = args.filter((a) => a.startsWith('--'));
+const positional: string[] = args.filter((a) => !a.startsWith('--'));
+const extDir: string = resolve(positional[0] ?? '.output/chrome-mv3'); // 没有这个参数就注入稳定版本
+const port: number = Number(flags.find((f) => f.startsWith('--port='))?.slice(7) || 9222);
+const restartChrome: boolean = flags.includes('--restart-chrome');
+const noOpen: boolean = flags.includes('--no-open');
 
 const CHROME_PATHS = [
   process.env.CHROME_PATH,
@@ -23,11 +22,11 @@ const CHROME_PATHS = [
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
 ].filter(Boolean);
 
-function findChrome() {
+function findChrome(): string | undefined {
   return CHROME_PATHS.find((p) => existsSync(p));
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 async function getVersion(timeoutMs = 3000) {
   const ctrl = new AbortController();
@@ -54,7 +53,7 @@ async function waitForVersion(retries = 20, intervalMs = 1000) {
   throw new Error('Chrome 调试端口未就绪');
 }
 
-function run(cmd, cmdArgs) {
+function run(cmd: string, cmdArgs: string[]): Promise<number> {
   return new Promise((resolvePromise) => {
     const child = spawn(cmd, cmdArgs, { stdio: 'ignore', detached: false });
     child.on('close', (code) => resolvePromise(code ?? 0));
@@ -108,7 +107,7 @@ function printManualGuide() {
   console.log('策略被公司管控锁定时，上面 3 步即本机最快路径。');
 }
 
-function cdpCall(ws, method, params) {
+function cdpCall(ws: WebSocket, method: string, params: Record<string, unknown>): Promise<any> {
   return new Promise((resolvePromise, rejectPromise) => {
     const id = Math.floor(Math.random() * 1e9);
     const onMessage = (event) => {

@@ -19,7 +19,7 @@ pnpm dev        # 自动拉起 Chrome（独立 profile）并加载扩展，支�
 
 > `pnpm dev` 的自动开浏览器依赖 `web-ext`（已列入 devDependencies）。若未安装，WXT 会退化为手动模式并在日志提示 `Load ".output\chrome-mv3-dev" as an unpacked extension manually`，此时按下方「构建与手动加载」操作一次即可。
 
-## 一键脚本加载（scripts/load-into-chrome.mjs）
+## 一键脚本加载（scripts/load-into-chrome.ts）
 
 ```bash
 pnpm load              # 生产构建 + 自动注入（Chrome 可调试时），否则降级为半自动
