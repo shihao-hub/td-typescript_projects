@@ -37,24 +37,24 @@
 6. 点击 Chrome 顶栏的拼图图标，把 **Gemini Launcher** 固定到顶栏。
 
 ### 第三步：一键注册 Native Messaging 宿主
-在项目根目录打开 PowerShell 并运行：
+在项目根目录运行：
 ```powershell
 cd D:\Users\language_projects\typescript_projects\gemini-launcher
-.\register.ps1
+uv run register.py
 ```
-* 脚本会提示你粘贴刚刚复制的 **扩展 ID**（如果未检测到 `gemini_host.exe` 会自动先调用 `build_exe.ps1` 进行编译）。
+* 脚本会提示你粘贴刚刚复制的 **扩展 ID**（如果未检测到 `gemini_host.exe` 会自动先调用 `build_exe.py` 进行编译）。
 * 脚本将自动更新配置文件并写入注册表：
   `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.gemini.launcher`
 * **提示**：注册完成后请完全重启一次 Chrome 浏览器。
 
 ---
 
-## 自主编译 Native Host (build_exe.ps1)
+## 自主编译 Native Host (build_exe.py)
 
 如果修改了 `host/host.py` 中的逻辑，可以直接运行编译脚本重新生成 `gemini_host.exe`：
 ```powershell
 cd D:\Users\language_projects\typescript_projects\gemini-launcher
-.\build_exe.ps1
+uv run build_exe.py
 ```
 该脚本通过 `uv run --with pyinstaller` 纯净拉取打包工具，零系统依赖污染，并在编译完成后自动清理中间构建缓存。
 
@@ -65,6 +65,6 @@ cd D:\Users\language_projects\typescript_projects\gemini-launcher
 若未来不再需要，运行以下脚本即可清理注册表：
 ```powershell
 cd D:\Users\language_projects\typescript_projects\gemini-launcher
-.\unregister.ps1
+uv run unregister.py
 ```
 然后在 `chrome://extensions/` 中移除该扩展即可。
