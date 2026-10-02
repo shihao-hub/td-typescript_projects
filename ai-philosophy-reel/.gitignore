@@ -1,0 +1,13 @@
+# 依赖
+node_modules/
+
+# 渲染成品（体积大，重跑 bun run render 生成；不入库）
+output/
+
+# 音频中间产物（合成与试听过程文件）
+temp_audio.wav
+test.wav
+narration.wav
+v2_full_audio.wav
+pure_voice.aac
+plato_narration.mp3

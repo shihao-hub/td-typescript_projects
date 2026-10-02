@@ -1,0 +1,14 @@
+{
+  "name": "ai-philosophy-reel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI 哲学与科普短视频 Demo：莱布尼茨与八卦二进制（确定性离线渲染流水线）",
+  "scripts": {
+    "render": "bun scripts/render.ts",
+    "preview": "bun scripts/render.ts --preview"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}
