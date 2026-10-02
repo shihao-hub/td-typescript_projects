@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gemini Launcher",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Minimal single-icon trigger for Chrome native Gemini assistant",
   "permissions": [
     "nativeMessaging"
