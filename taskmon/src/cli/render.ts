@@ -1,9 +1,9 @@
 import chalk from 'chalk';
-import type { ProcessGroup } from './types.js';
-import type { SysMem } from './sysmem.js';
-import type { ProcessTreeNode } from './proctree.js';
-import { flattenTree } from './proctree.js';
-import { bar, displayWidth, formatBytes, padEnd, padStart, truncate } from './format.js';
+import type { ProcessGroup } from '../core/types.js';
+import type { SysMem } from '../core/sysmem.js';
+import type { ProcessTreeNode } from '../core/proctree.js';
+import { flattenTree } from '../core/proctree.js';
+import { bar, displayWidth, formatBytes, padEnd, padStart, truncate } from '../core/format.js';
 
 export interface RenderOptions {
   width: number;

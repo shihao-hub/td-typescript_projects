@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { classifyAttempt, guardKill, killPid, killPids } from '../kill.js';
-import type { ProcessGroup } from '../types.js';
+import { classifyAttempt, guardKill, killPid, killPids } from '../core/kill.js';
+import type { ProcessGroup } from '../core/types.js';
 
 function makeGroup(name: string, pids: number[]): ProcessGroup {
   return {

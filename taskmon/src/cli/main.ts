@@ -3,22 +3,46 @@ import { stdin, stdout } from 'node:process';
 import readline from 'node:readline';
 import chalk from 'chalk';
 import { Command } from 'commander';
-import { logger } from './logger.js';
-import { listProcesses } from './tasklist.js';
-import { groupProcesses } from './grouping.js';
-import { readSysMem } from './sysmem.js';
+import { logger } from '../shared/logger.js';
+import { version } from '../shared/paths.js';
+import { listProcesses } from '../core/tasklist.js';
+import { groupProcesses } from '../core/grouping.js';
+import { readSysMem } from '../core/sysmem.js';
 import { renderFrame, renderTreeFrame } from './render.js';
 import type { Frame } from './render.js';
 import { allLines } from './render.js';
-import { formatBytes, truncate } from './format.js';
-import { guardKill, killPids } from './kill.js';
-import { collectCimProcesses } from './cim.js';
-import type { CimProc } from './cim.js';
-import { buildTree, collectNodes, defaultExpandedRootPids, flattenTree, mergeTopology, subtreeProcesses } from './proctree.js';
-import type { TreeRow } from './proctree.js';
+import { formatBytes, truncate } from '../core/format.js';
+import { guardKill, killPids } from '../core/kill.js';
+import { collectCimProcesses } from '../core/cim.js';
+import type { CimProc } from '../core/cim.js';
+import { buildTree, collectNodes, defaultExpandedRootPids, flattenTree, mergeTopology, subtreeProcesses } from '../core/proctree.js';
+import type { TreeRow } from '../core/proctree.js';
 import { activateInstance, ensureSingleton, releaseLock } from './singleton.js';
 import type { LockDecision } from './singleton.js';
-import type { ProcessGroup, ProcessInfo } from './types.js';
+import type { ProcessGroup, ProcessInfo } from '../core/types.js';
+
+/**
+ * serve：与 GUI 共用同一个 HTTP Handler 托管 WebUI（不进入 TUI、不抢 TUI 单例锁）。
+ * 与 go-wails 的 `serve` 语义一致：根路径返回完整工作台，`/api/*` 返回数据。
+ */
+if (process.argv[2] === 'serve') {
+  const portIdx = process.argv.indexOf('--port');
+  const rawPort = portIdx > 0 ? process.argv[portIdx + 1] : undefined;
+  const port = rawPort !== undefined ? Number(rawPort) : 0;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    console.error(`端口非法：${rawPort}`);
+    process.exit(1);
+  }
+  const { startServer } = await import('../server/server.js');
+  const handle = await startServer(port);
+  console.log(`taskmon WebUI is running at ${handle.url}`);
+  const shutdown = (): void => {
+    void handle.close().finally(() => process.exit(0));
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+  await new Promise<void>(() => {});
+}
 
 const program = new Command();
 program
@@ -30,7 +54,7 @@ program
   .option('--tree', '进程树视图：按父子孙树展示（交互模式为初始视图，T 键随时切换）')
   .option('--once', '输出一帧快照后退出（调试 / 管道友好）')
   .option('--multi', '跳过全局单例锁，允许多实例并行')
-  .version(process.env.TASKMON_VERSION ?? 'dev');
+  .version(version());
 program.parse();
 
 const opts = program.opts<{
@@ -743,7 +767,7 @@ async function guardSingleton(): Promise<void> {
 
 async function main(): Promise<void> {
   logger.info(
-    { version: process.env.TASKMON_VERSION ?? 'dev', mode: opts.once ? 'once' : interactive ? 'tui' : 'pipe', interval: opts.interval, top: opts.top },
+    { version: version(), mode: opts.once ? 'once' : interactive ? 'tui' : 'pipe', interval: opts.interval, top: opts.top },
     'taskmon 启动',
   );
   if (!opts.once && interactive && !opts.multi) {

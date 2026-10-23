@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bar, displayWidth, formatBytes, padEnd, padStart, truncate } from '../format.js';
+import { bar, displayWidth, formatBytes, padEnd, padStart, truncate } from '../core/format.js';
 
 const KB = 1024;
 const MB = 1024 * 1024;

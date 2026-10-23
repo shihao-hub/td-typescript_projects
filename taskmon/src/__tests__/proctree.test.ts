@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { CimProc } from '../cim.js';
-import { buildTree, collectNodes, defaultExpandedRootPids, flattenTree, isValidParent, mergeTopology, subtreeProcesses } from '../proctree.js';
-import type { ProcessInfo } from '../types.js';
+import type { CimProc } from '../core/cim.js';
+import { buildTree, collectNodes, defaultExpandedRootPids, flattenTree, isValidParent, mergeTopology, subtreeProcesses } from '../core/proctree.js';
+import type { ProcessInfo } from '../core/types.js';
 
 const MB = 1024 * 1024;
 const T0 = 1_700_000_000_000;

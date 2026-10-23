@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { indexByPid, parseCimJson, parseCreated } from '../cim.js';
+import { indexByPid, parseCimJson, parseCreated } from '../core/cim.js';
 
 describe('parseCreated', () => {
   it('epoch 毫秒数字直接通过', () => {

@@ -3,8 +3,9 @@ import { promisify } from 'node:util';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
-import { logger } from './logger.js';
-import { parseTasklistCsv } from './tasklist.js';
+import { logger } from '../shared/logger.js';
+import { dataDir, isPackaged, version as appVersion } from '../shared/paths.js';
+import { parseTasklistCsv } from '../core/tasklist.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -34,21 +35,13 @@ export interface ActivateResult {
   reason?: string;
 }
 
-// 判定 exe/dev 必须用全局 process：import process 会让 Bun --define 的文本替换失配（README「日志」已记录的同类坑）
-function isPackaged(): boolean {
-  return process.env.TASKMON_VERSION !== undefined;
-}
-
-// 数据目录：%APPDATA%\language_projects\taskmon\，取不到 APPDATA 回退 ~/.language_projects/taskmon/
 function lockDir(): string {
-  const appdata = process.env.APPDATA
-  if (appdata) return join(appdata, 'language_projects', 'taskmon')
-  return join(os.homedir(), '.language_projects', 'taskmon')
+  return dataDir();
 }
 
 function lockPath(): string {
   // 按版本隔离：不同版本（含 dev 与 exe 之间）各持一把锁，可并行；唤起也只唤起同版本实例
-  const version = process.env.TASKMON_VERSION ?? 'dev';
+  const version = appVersion();
   return join(lockDir(), `singleton-v${version}.lock`);
 }
 
@@ -56,7 +49,7 @@ function ownLockInfo(): LockInfo {
   return {
     pid: process.pid,
     mode: isPackaged() ? 'exe' : 'dev',
-    version: process.env.TASKMON_VERSION ?? 'dev',
+    version: appVersion(),
     startedAt: Date.now(),
     hostname: os.hostname(),
   };

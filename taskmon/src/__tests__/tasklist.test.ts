@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeWithCodePage, parseMemField, parseTasklistCsv, splitCsvLine } from '../tasklist.js';
+import { decodeWithCodePage, parseMemField, parseTasklistCsv, splitCsvLine } from '../core/tasklist.js';
 
 describe('splitCsvLine', () => {
   it('处理引号内的逗号与双引号转义', () => {

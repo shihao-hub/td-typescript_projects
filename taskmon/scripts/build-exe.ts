@@ -102,7 +102,7 @@ const outFile = join('release', `taskmon-v${version}.exe`);
 mkdirSync(join(root, 'release'), { recursive: true });
 
 const define = `process.env.TASKMON_VERSION="${version}"`;
-const r = spawnSync('bun', ['build', '--compile', '--define', define, '--outfile', outFile, 'src/main.ts'], {
+const r = spawnSync('bun', ['build', '--compile', '--define', define, '--outfile', outFile, 'src/cli/main.ts'], {
   cwd: root,
   stdio: 'inherit',
 });

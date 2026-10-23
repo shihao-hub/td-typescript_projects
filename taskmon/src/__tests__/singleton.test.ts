@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchesLock, parseLockText, VALID_OWNER_NAMES } from '../singleton.js';
+import { matchesLock, parseLockText, VALID_OWNER_NAMES } from '../cli/singleton.js';
 
 type LockInfoLike = { pid: number; mode: 'exe' | 'dev'; version: string; startedAt: number; hostname: string };
 

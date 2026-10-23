@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readSysMem } from '../sysmem.js';
+import { readSysMem } from '../core/sysmem.js';
 
 describe('readSysMem', () => {
   it('读数合理（total>0，0<=used<=total，占比 0~1）', () => {

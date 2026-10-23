@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { allLines, renderFrame, renderTreeFrame } from '../render.js';
-import type { Frame } from '../render.js';
-import { groupProcesses } from '../grouping.js';
-import { buildTree } from '../proctree.js';
-import type { ProcessInfo } from '../types.js';
+import { allLines, renderFrame, renderTreeFrame } from '../cli/render.js';
+import type { Frame } from '../cli/render.js';
+import { groupProcesses } from '../core/grouping.js';
+import { buildTree } from '../core/proctree.js';
+import type { ProcessInfo } from '../core/types.js';
 
 const MB = 1024 * 1024;
 

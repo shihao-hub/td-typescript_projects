@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { groupProcesses } from '../grouping.js';
-import type { ProcessInfo } from '../types.js';
+import { groupProcesses } from '../core/grouping.js';
+import type { ProcessInfo } from '../core/types.js';
 
 const MB = 1024 * 1024;
 

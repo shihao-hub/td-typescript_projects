@@ -17,6 +17,9 @@ pnpm install
 pnpm dev            # 开发运行（tsx 直跑，--version 显示 dev）
 pnpm build && pnpm start
 pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与打包」
+pnpm dev serve      # 启动浏览器工作台（与 GUI 共用同一 WebUI）
+pnpm gui            # 开发模式直接开窗（关窗即退，无托盘）
+pnpm gui:package    # 打包 GUI → release/gui/win-unpacked/{taskmon.exe,taskmon-tray.exe}
 ```
 
 ## 参数
@@ -29,6 +32,39 @@ pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与�
 | `--tree` | 进程树视图（交互模式为初始视图，T 键随时切换；`--once` 输出树快照） | 关 |
 | `--once` | 输出一帧快照后退出（管道/调试友好），配合 `-e` 输出全量快照 | - |
 | `--multi` | 跳过全局单例锁，允许多实例并行 | 关 |
+
+`serve` 是独立子命令（不进入 TUI、不抢 TUI 单例锁）：`pnpm dev serve [--port 0]`，根路径返回完整工作台，`/api/*` 提供快照与结束进程接口。
+
+## GUI 桌面版（轻量托盘 + 按需窗口）
+
+参照 `sh-go-wails-desktop` 的双通道契约，但按「点开才看」的使用习惯拆成两层，避免 Chromium 常驻：
+
+| 层 | 入口 | 常驻内存 | 行为 |
+|---|---|---|---|
+| 托盘 | `release/gui/win-unpacked/taskmon-tray.exe` | 约 30 MB | 常驻通知区；点击打开面板，关窗不影响托盘 |
+| 窗口 | `release/gui/win-unpacked/taskmon.exe` / `pnpm gui` | 约 440 MB（仅打开时） | HTTP 服务 + Electron 窗口；关窗即整体退出 |
+| CLI | `release/taskmon-v*.exe` / `pnpm dev` | 仅运行时 | 控制台 TUI，无窗口 |
+
+- **关窗即销毁**：窗口关闭后 Electron 主进程、renderer、GPU、utility 全部退出，内存归零；下次点击托盘重新启动并恢复上次几何。
+- **托盘轻量**：托盘是 Windows 自带 `csc` 编译的 C# WinForms sidecar（约 30 MB），业务与界面仍全部是 TS/Electron。
+- **单实例**：GUI 与 CLI 各自单实例；dev / release 通道互不唤醒（`Electron userData` 指向通道数据目录）。
+- **窗口几何记忆**：`<dataDir>/window.json` 记录尺寸/位置/最大化；最大化只翻标记，不污染还原尺寸；外接屏拔掉后窗口会自动回中。
+- **同一 Handler**：GUI 窗口与 `serve` 打开的是同一套 `src/web` 工作台与 `/api/*`，不存在「GUI 有页面、CLI 只有裸 API」的分裂。
+- **数据目录**：`%APPDATA%\language_projects\taskmon\{dev,prod}`（日志、锁、窗口状态、Electron 缓存均在其中）。
+- **开机自启**：托盘右键菜单可勾选（仅 release 编译的托盘允许写入；dev 托盘置灰）。
+- **体积代价**：GUI 目录约 360 MB（Electron runtime）；CLI 仍是约 85 MB 的单文件 exe。
+
+### 目录结构
+
+```text
+src/core/     采集与纯逻辑（tasklist / cim / grouping / proctree / kill / sysmem / sampler）
+src/cli/      控制台 TUI（main / render / singleton）
+src/server/   node:http Handler（GUI 与 CLI serve 共用）
+src/web/      内嵌工作台（HTML/CSS/JS 字符串，Bun 与 Electron 共用）
+src/shared/   通道判定、数据目录、日志
+electron/     Electron 窗口宿主（单实例 / 几何记忆）
+tray/         轻量托盘 sidecar（C# WinForms，csc 编译）
+```
 
 ## 按键
 
@@ -45,7 +81,7 @@ pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与�
 
 交互 TUI 模式下**同一版本只允许一个实例**（同机同用户）：同版本再次启动会打印 `taskmon 已在运行：exe v0.2.0 · PID 1234`（dev 实例显示 `dev`），唤起原实例的控制台窗口（还原最小化 + 前置）后以退出码 0 退出。**不同版本互不干扰可并行**（dev 与 exe、v0.2.2 与 v0.3.0 各算一个版本）。
 
-- 锁文件：`%APPDATA%\language_projects\taskmon\singleton-v<version>.lock`（dev 为 `singleton-vdev.lock`；取不到 APPDATA 回退 `~/.language_projects/taskmon/`），内容为 JSON：`pid`、`mode`（exe/dev）、`version`、`startedAt`、`hostname`。exe/dev 判定同日志模块（`TASKMON_VERSION` 编译期注入）；不带版本的旧全局锁（`singleton.lock`）会被新版自动清掉
+- 锁文件：`%APPDATA%\language_projects\taskmon\<dev|prod>\singleton-v<version>.lock`（dev 为 `singleton-vdev.lock`；取不到 APPDATA 回退 `~/.language_projects/taskmon/<dev|prod>/`），内容为 JSON：`pid`、`mode`（exe/dev）、`version`、`startedAt`、`hostname`。exe/dev 判定同日志模块（`TASKMON_VERSION` 编译期注入）；不带版本的旧全局锁（`singleton.lock`）会被新版自动清掉
 - **不受锁约束**：`--once`、管道/重定向输出（脚本可并发取快照）、`--version`/`--help`；逃生开关 `--multi`
 - **陈锁自愈**：实例被 `taskkill /F` 等强杀来不及清理时，该版本下次启动会验证锁——`pid` 已死、或 PID 被**其他进程复用**（Win32_Process 的 `CreationDate` 与锁内 `startedAt` 比对 ±5s，白名单 `taskmon.exe`/`node.exe`/`bun.exe`）即删锁接管，无需手工清理；不再使用的旧版本锁文件会残留（百余字节，无害）
 - **唤起原理**：控制台窗口属 conhost / WindowsTerminal 所有，按 PID 找不到窗口；由第二实例拉起一个 PowerShell 子进程，在其内部 `FreeConsole → AttachConsole(目标pid) → GetConsoleWindow` 拿到对方控制台顶层窗口后 `SetForegroundWindow`（最小化先 `SW_RESTORE`；被前台权限拒绝时回退 `SwitchToThisWindow`）
@@ -82,9 +118,9 @@ pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与�
 
 诊断日志写入文件，控制台完全留给实时表格渲染（`--once` / 管道模式的输出不受影响）。
 
-- 路径：`%APPDATA%\language_projects\taskmon\logs\taskmon.log`（取不到 `APPDATA` 时回退 `~/.language_projects/taskmon/logs/`）
+- 路径：`%APPDATA%\language_projects\taskmon\<dev|prod>\logs\taskmon.log`（取不到 `APPDATA` 时回退 `~/.language_projects/taskmon/<dev|prod>/logs/`）
 - 轮转：按 2MB + 每天一次，最多保留 5 份旧文件（`rotating-file-stream`）
-- 格式随运行方式自动切换（判定依据：exe 打包时 `bun --define` 注入的 `TASKMON_VERSION` 是否存在，见 `src/logger.ts`）：
+- 格式随运行方式自动切换（判定依据：exe 打包时 `bun --define` 注入的 `TASKMON_VERSION` 是否存在，见 `src/shared/logger.ts`）：
   - 开发（`pnpm dev` / `pnpm start`）：**纯文本**（pino-pretty，level=debug）
   - exe 实际使用：**JSON 行**（level=info），可 `grep` / `jq` 分析
 - 坑：判定处必须使用**全局 `process`**（`import process from 'node:process'` 会让 Bun 把引用重写为内部绑定名，`--define process.env.TASKMON_VERSION` 的文本替换随之失配，注入悄悄失效——曾导致 exe 误走开发分支输出纯文本）
@@ -92,7 +128,7 @@ pnpm exe            # 打包单文件 exe（需 Bun），见下方「版本与�
 查看日志（PowerShell 实时跟踪）：
 
 ```powershell
-Get-Content "$env:APPDATA\language_projects\taskmon\logs\taskmon.log" -Tail 50 -Wait
+Get-Content "$env:APPDATA\language_projects\taskmon\dev\logs\taskmon.log" -Tail 50 -Wait
 ```
 
 ### 为什么不用 pino-roll（以及任何 pino transport）
@@ -162,13 +198,15 @@ git checkout taskmon/v0.2.0   # 检出该版本源码（进入 detached HEAD，�
 git tag -d taskmon/v0.2.0     # 删除本地 tag（打错时；已推送的话还要 git push origin :refs/tags/taskmon/v0.2.0）
 ```
 
-## 二期规划（已选型：Bun）
+## 双通道演进（已完成）
 
-二期目标：产出两个 exe —— **CLI 控制台版** + **GUI 图形版**，打包方案选定 **Bun**。
+二期目标：产出两个通道 —— **CLI 控制台版** + **GUI 图形版**。
 
-- CLI exe：已落地（v0.2.0 起），由 `pnpm exe` 封装，见「版本与打包（exe）」
-- 建议结构：重构为 `src/core`（tasklist 解析 + 分组排序）+ `src/cli` + `src/gui`，两个入口共享 core
-- 落选备选：Node SEA（官方、~80MB，但步骤多且不支持 ESM 入口）；Electron portable（GUI 逻辑复用最省、~100MB）；Tauri v2（体积最小 5-10MB，但需移植 Rust 或捆绑 sidecar）
+- CLI：Bun 单文件（v0.2.0 起），`pnpm exe` 封装，见「版本与打包（exe）」
+- GUI：Electron 45 按需窗口（单实例 / 几何记忆）+ `csc` 编译的轻量 C# 托盘，`pnpm gui:package` 产出目录版
+- 共享结构：`src/core`（采集与纯逻辑）+ `src/cli`（TUI）+ `src/server`（同一 HTTP Handler）+ `src/web`（内嵌工作台）
+- 选型取舍：Electron 常驻托盘会连带 GPU/utility 约 315 MB，故拆成「30 MB 托盘 + 按需 440 MB 窗口」；窗口关闭即全退
+- 落选备选：Node SEA（不支持 ESM 入口）；Tauri v2（需 Rust 壳，不符合纯 TS 约束）
 
 ## 数据口径
 

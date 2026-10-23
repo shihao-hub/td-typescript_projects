@@ -3,22 +3,26 @@
   "version": "0.2.1",
   "description": "Windows 任务管理器·内存版：按进程名分组展示内存占用，控制台实时刷新",
   "type": "module",
+  "main": "dist-electron/main.mjs",
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "dev": "tsx src/main.ts",
+    "dev": "tsx src/cli/main.ts",
     "build": "tsc",
-    "start": "node dist/main.js",
+    "start": "node dist/cli/main.js",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p scripts/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p scripts/tsconfig.json && tsc --noEmit -p electron/tsconfig.json",
     "exe": "bun scripts/build-exe.ts",
     "use": "bun scripts/use-latest-exe.ts",
     "release": "bun scripts/build-exe.ts --tag && bun scripts/use-latest-exe.ts",
-    "clean-release": "bun scripts/clean-release.ts"
+    "clean-release": "bun scripts/clean-release.ts",
+    "gui:build": "bun scripts/build-gui.ts",
+    "gui": "bun scripts/build-gui.ts && electron .",
+    "gui:package": "bun scripts/build-gui.ts --package"
   },
   "bin": {
-    "taskmon": "dist/main.js"
+    "taskmon": "dist/cli/main.js"
   },
   "dependencies": {
     "chalk": "^5.4.1",
@@ -29,8 +33,34 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "~0.25.12",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "electron-winstaller"
+    ]
+  },
+  "build": {
+    "appId": "com.shihao.taskmon",
+    "productName": "taskmon",
+    "directories": {
+      "output": "release/gui",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "dir"
+      ],
+      "icon": "assets/icon.ico"
+    }
   }
 }
