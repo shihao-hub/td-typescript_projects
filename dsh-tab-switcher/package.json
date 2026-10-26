@@ -1,0 +1,14 @@
+{
+  "name": "dsh-tab-switcher",
+  "version": "1.0.0",
+  "description": "Chrome MV3 扩展：一键精准定位并切换到 DeepSeek Harness 本地标签页 (127.0.0.1:11111)，支持与 AutoHotkey 抽屉式 Toggle 联动",
+  "type": "module",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "dev": "bun scripts/build.ts --watch"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.308",
+    "typescript": "^5.7.3"
+  }
+}
