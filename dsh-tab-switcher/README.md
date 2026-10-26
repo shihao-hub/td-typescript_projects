@@ -37,9 +37,12 @@
 
 ## 内部联动快捷键说明
 
-- **默认内部命令键**：<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>9</kbd>
+- **直达 DSH 命令（switch-to-dsh）**：<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>9</kbd>（对应系统物理键 **<kbd>Alt</kbd> + <kbd>D</kbd>**，坚决直达并锁定，绝不擅自切走）
+- **往返返回命令（toggle-back）**：<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>8</kbd>（对应系统物理键 **<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>D</kbd>**，在 DSH 与上一个工作标签页之间无缝 Toggle 往返）
 - **配置与修改**：可在 Chrome 地址栏访问 `chrome://extensions/shortcuts` 查看或自定义该内部命令快捷键；
-- 配合系统全局 AHK 脚本（`app_switcher.ahk`）后，用户在物理键盘上只需统一按标准的单手快捷键 **<kbd>Alt</kbd> + <kbd>D</kbd>** 即可触发。
+- 配合系统全局 AHK 脚本（`app_switcher.ahk`）后，用户在物理键盘上按：
+  - **<kbd>Alt</kbd> + <kbd>D</kbd>**：立刻直达 DSH；
+  - **<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>D</kbd>**：切回刚才的工作标签页。
 
 ---
 

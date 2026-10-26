@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "DSH Tab Switcher",
-  "version": "1.0.0",
-  "description": "一键激活并精准切换至本地 DeepSeek Harness 标签页 (127.0.0.1:11111)，杜绝其他 DeepSeek 网页干扰",
+  "version": "1.1.0",
+  "description": "一键激活并精准切换至本地 DeepSeek Harness 标签页 (127.0.0.1:11111)，支持 Alt+D 坚定直达与 Ctrl+Alt+D 双向往返",
   "permissions": [
     "tabs"
   ],
@@ -10,7 +10,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "点击切换至 DeepSeek Harness"
+    "default_title": "点击直达 DeepSeek Harness"
   },
   "icons": {
     "16": "icons/icon16.png",
@@ -23,7 +23,14 @@
         "default": "Ctrl+Shift+9",
         "windows": "Ctrl+Shift+9"
       },
-      "description": "精准切换至 DeepSeek Harness 标签页"
+      "description": "精准直达 DeepSeek Harness (Alt+D)"
+    },
+    "toggle-back": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+8",
+        "windows": "Ctrl+Shift+8"
+      },
+      "description": "在 DSH 与上一个工作标签页之间往返切 (Ctrl+Alt+D)"
     }
   }
 }
