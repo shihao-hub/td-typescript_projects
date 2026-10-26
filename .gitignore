@@ -25,3 +25,6 @@ pnpm-debug.log*
 
 # 可执行文件（编译打包产物）
 *.exe
+
+# Windows 下 `>nul` 重定向误生成的占位文件
+nul
