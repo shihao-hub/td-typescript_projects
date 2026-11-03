@@ -1,11 +1,13 @@
 import { listProcesses } from './tasklist.js';
-import { collectCimProcesses } from './cim.js';
+import { collectCimProcesses, computeCpuPercentages } from './cim.js';
 import type { CimProc } from './cim.js';
 import { groupProcesses } from './grouping.js';
 import { buildTree, mergeTopology } from './proctree.js';
 import type { ProcessTreeNode } from './proctree.js';
 import { readSysMem } from './sysmem.js';
 import type { SysMem } from './sysmem.js';
+import { readSysCpu } from './syscpu.js';
+import type { SysCpu } from './syscpu.js';
 import type { ProcessGroup, ProcessInfo } from './types.js';
 import { logger } from '../shared/logger.js';
 
@@ -16,12 +18,13 @@ export interface Snapshot {
   tree: ProcessTreeNode[];
   totalProcs: number;
   sysMem: SysMem;
+  sysCpu: SysCpu;
   topology: { available: boolean; at: number | null };
   error?: string;
 }
 
 /**
- * 采样器：tasklist 主频刷新 + CIM 低频拓扑（overlap-skip）。
+ * 采样器：tasklist 主频刷新 + CIM 低频拓扑与 CPU 采样（overlap-skip）。
  * TUI 与 HTTP 服务共用同一套采集语义；HTTP 侧只读缓存，绝不为每个请求 spawn 子进程。
  */
 export class Sampler {
@@ -29,6 +32,8 @@ export class Sampler {
   private groups: ProcessGroup[] = [];
   private tree: ProcessTreeNode[] = [];
   private cim = new Map<number, CimProc>();
+  private prevCim: Map<number, CimProc> | undefined;
+  private prevCimAt: number | undefined;
   private cimAt: Date | undefined;
   private cimBusy = false;
   private cimWarned = false;
@@ -38,6 +43,7 @@ export class Sampler {
   private cimTimer: NodeJS.Timeout | undefined;
   private lastAt = new Date();
   private lastError: string | undefined;
+  private sysCpu: SysCpu = readSysCpu();
 
   constructor(private readonly intervalMs = 2_000) {}
 
@@ -65,6 +71,7 @@ export class Sampler {
       tree: this.tree,
       totalProcs: this.procs.length,
       sysMem: readSysMem(),
+      sysCpu: this.sysCpu,
       topology: { available: this.cim.size > 0, at: this.cimAt?.getTime() ?? null },
       error: this.lastError,
     };
@@ -80,6 +87,7 @@ export class Sampler {
     if (this.busy) return;
     this.busy = true;
     try {
+      this.sysCpu = readSysCpu();
       this.procs = await listProcesses();
       this.applyTopology();
       this.lastAt = new Date();
@@ -110,8 +118,13 @@ export class Sampler {
     }
     this.cimBusy = true;
     try {
-      this.cim = await collectCimProcesses();
-      this.cimAt = new Date();
+      const curr = await collectCimProcesses();
+      const now = Date.now();
+      computeCpuPercentages(curr, now, this.prevCim, this.prevCimAt, this.sysCpu.cores);
+      this.prevCim = curr;
+      this.prevCimAt = now;
+      this.cim = curr;
+      this.cimAt = new Date(now);
       if (this.procs.length > 0) this.applyTopology();
     } catch (e) {
       if (!this.cimWarned) {

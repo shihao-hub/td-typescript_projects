@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bar, displayWidth, formatBytes, padEnd, padStart, truncate } from '../core/format.js';
+import { bar, displayWidth, formatBytes, formatCpu, padEnd, padStart, truncate } from '../core/format.js';
 
 const KB = 1024;
 const MB = 1024 * 1024;
@@ -45,6 +45,17 @@ describe('formatBytes', () => {
     expect(formatBytes(84528 * KB)).toBe('82.5 MB');
     expect(formatBytes(1.5 * GB)).toBe('1.50 GB');
     expect(formatBytes(512 * MB)).toBe('512 MB');
+  });
+});
+
+describe('formatCpu', () => {
+  it('格式化 CPU 百分比：保留一位小数', () => {
+    expect(formatCpu(0)).toBe('0.0%');
+    expect(formatCpu(0.052)).toBe('5.2%');
+    expect(formatCpu(0.2456)).toBe('24.6%');
+    expect(formatCpu(1)).toBe('100.0%');
+    expect(formatCpu(undefined)).toBe('');
+    expect(formatCpu(NaN)).toBe('');
   });
 });
 

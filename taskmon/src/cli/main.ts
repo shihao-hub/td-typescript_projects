@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { cpus } from 'node:os';
 import { stdin, stdout } from 'node:process';
 import readline from 'node:readline';
 import chalk from 'chalk';
@@ -8,15 +9,17 @@ import { version } from '../shared/paths.js';
 import { listProcesses } from '../core/tasklist.js';
 import { groupProcesses } from '../core/grouping.js';
 import { readSysMem } from '../core/sysmem.js';
+import { readSysCpu } from '../core/syscpu.js';
+import type { SysCpu } from '../core/syscpu.js';
 import { renderFrame, renderTreeFrame } from './render.js';
 import type { Frame } from './render.js';
 import { allLines } from './render.js';
 import { formatBytes, truncate } from '../core/format.js';
 import { guardKill, killPids } from '../core/kill.js';
-import { collectCimProcesses } from '../core/cim.js';
+import { collectCimProcesses, computeCpuPercentages } from '../core/cim.js';
 import type { CimProc } from '../core/cim.js';
 import { buildTree, collectNodes, defaultExpandedRootPids, flattenTree, mergeTopology, subtreeProcesses } from '../core/proctree.js';
-import type { TreeRow } from '../core/proctree.js';
+import type { ProcessTreeNode, TreeRow } from '../core/proctree.js';
 import { activateInstance, ensureSingleton, releaseLock } from './singleton.js';
 import type { LockDecision } from './singleton.js';
 import type { ProcessGroup, ProcessInfo } from '../core/types.js';
@@ -47,9 +50,10 @@ if (process.argv[2] === 'serve') {
 const program = new Command();
 program
   .name('taskmon')
-  .description('Windows 任务管理器·内存版：按进程名分组展示内存占用，控制台实时刷新')
+  .description('Windows 任务管理器·内存与 CPU 版：按进程名分组或父子树展示资源占用，控制台实时刷新')
   .option('-i, --interval <seconds>', '刷新间隔（秒），最小 1', (v) => Math.max(1, Number(v) || 2), 2)
-  .option('-t, --top <n>', '只显示内存最大的前 n 组（0 = 全部）', (v) => Math.max(0, Math.floor(Number(v) || 0)), 0)
+  .option('-t, --top <n>', '只显示资源最大的前 n 组（0 = 全部）', (v) => Math.max(0, Math.floor(Number(v) || 0)), 0)
+  .option('-s, --sort <type>', '排序依据：mem（默认按内存）或 cpu（按 CPU 占用）', 'mem')
   .option('-e, --expand', '展开全部分组（默认全部折叠，交互中可用 Enter/a 控制）')
   .option('--tree', '进程树视图：按父子孙树展示（交互模式为初始视图，T 键随时切换）')
   .option('--once', '输出一帧快照后退出（调试 / 管道友好）')
@@ -60,6 +64,7 @@ program.parse();
 const opts = program.opts<{
   interval: number;
   top: number;
+  sort: string;
   expand: boolean;
   tree: boolean;
   once: boolean;
@@ -71,9 +76,11 @@ let groups: ProcessGroup[] = [];
 let procs: ProcessInfo[] = [];
 let treeRoots: ReturnType<typeof buildTree> = [];
 let viewMode: 'group' | 'tree' = opts.tree ? 'tree' : 'group';
+let sortBy: 'mem' | 'cpu' = opts.sort?.toLowerCase() === 'cpu' ? 'cpu' : 'mem';
 let totalProcs = 0;
 let lastDate = new Date();
 let sysMem = readSysMem();
+let sysCpu: SysCpu = readSysCpu();
 let error: string | undefined;
 let lastLoggedError: string | undefined;
 let offset = 0;
@@ -90,8 +97,10 @@ const expandedNodes = new Set<number>();
 /** explorer 根默认展开只做一次：用户手动收起后不复活；explorer 未运行时等它出现再补 */
 let treeDefaultExpanded = false;
 
-/** CIM 拓扑状态：最近快照 + overlap-skip 采集循环（独立于 tasklist 主刷新） */
+/** CIM 拓扑与 CPU 采样状态：最近快照 + overlap-skip 采集循环（独立于 tasklist 主刷新） */
 let cimMap = new Map<number, CimProc>();
+let prevCimMap: Map<number, CimProc> | undefined;
+let prevCimAt: number | undefined;
 let cimAt: Date | undefined;
 let cimBusy = false;
 let cimWarned = false;
@@ -137,8 +146,8 @@ function shownTreeRows(): TreeRow[] {
 /** 用最近一次 CIM 快照补全进程拓扑并重算分组与树 */
 function applyTopology(): void {
   procs = mergeTopology(procs, cimMap);
-  groups = groupProcesses(procs);
-  treeRoots = buildTree(procs);
+  groups = groupProcesses(procs, sortBy);
+  treeRoots = buildTree(procs, sortBy);
   if (!treeDefaultExpanded) {
     const pids = defaultExpandedRootPids(treeRoots);
     if (pids.length > 0) {
@@ -150,6 +159,7 @@ function applyTopology(): void {
 
 async function tick(): Promise<void> {
   try {
+    sysCpu = readSysCpu();
     procs = await listProcesses();
     applyTopology();
     totalProcs = procs.length;
@@ -191,8 +201,8 @@ function scheduleCim(): void {
 }
 
 /**
- * CIM 拓扑采集循环（低节奏副通道）：
- * - overlap-skip：上一次没跑完不发起下一次（CIM 实测 2-4s > 默认间隔，天然滞后无感）
+ * CIM 拓扑与 CPU 采集循环（副通道）：
+ * - overlap-skip：上一次没跑完不发起下一次
  * - 失败降级：只 warn 一次日志，组视图丢父列、树视图提示拓扑不可用，绝不阻塞 tasklist 主刷新
  */
 async function cimTick(): Promise<void> {
@@ -203,8 +213,13 @@ async function cimTick(): Promise<void> {
   }
   cimBusy = true;
   try {
-    cimMap = await collectCimProcesses();
-    cimAt = new Date();
+    const curr = await collectCimProcesses();
+    const now = Date.now();
+    computeCpuPercentages(curr, now, prevCimMap, prevCimAt, sysCpu?.cores ?? cpus().length);
+    prevCimMap = curr;
+    prevCimAt = now;
+    cimMap = curr;
+    cimAt = new Date(now);
     if (procs.length > 0) {
       applyTopology();
       draw();
@@ -242,6 +257,8 @@ function currentFrame(): Frame {
       intervalSec: opts.interval,
       totalProcs,
       sysMem,
+      sysCpu,
+      sortBy,
       expanded: expandedNodes,
       cursorIndex: interactive ? cursor : undefined,
       topoAvailable: cimMap.size > 0,
@@ -255,6 +272,8 @@ function currentFrame(): Frame {
     intervalSec: opts.interval,
     totalProcs,
     sysMem,
+    sysCpu,
+    sortBy,
     expanded: expandedNames,
     cursorIndex: interactive ? cursor : undefined,
   });
@@ -338,6 +357,7 @@ function startKillConfirmTree(): void {
     processes: subtree,
     totalBytes: row.node.subtreeBytes,
     maxSingleBytes: Math.max(...subtree.map((s) => s.memBytes)),
+    totalCpuPct: row.node.subtreeCpuPct,
   };
   const guard = guardKill(pseudo, process.pid);
   if (!guard.ok) {
@@ -407,35 +427,47 @@ async function executeKill(): Promise<void> {
   scheduleResultClear();
 }
 
+/** 重算当前视图模式下的光标上限，并做 0~max 钳位 */
+function clampCursor(): void {
+  const max = viewMode === 'tree' ? Math.max(0, shownTreeRows().length - 1) : Math.max(0, shownGroups().length - 1);
+  cursor = Math.max(0, Math.min(max, cursor));
+}
 
 function draw(): void {
-  const frame = currentFrame();
-  lastFrame = frame;
-  const width = stdout.columns ?? 100;
+  if (!interactive) return;
+  clampCursor();
+  const f = currentFrame();
+  lastFrame = f;
+
+  const width = Math.max(72, stdout.columns ?? 100);
+  const height = stdout.rows ?? 40;
   const body = bodyRows();
-  const maxOffset = Math.max(0, frame.body.length - body);
 
-  // 光标合法性 + 视口跟随（保证光标行可见；行号均为 body 相对行号）
-  if (frame.groupRows.length > 0) {
-    cursor = Math.max(0, Math.min(cursor, frame.groupRows.length - 1));
-    const cursorRow = frame.groupRows[cursor]!;
-    if (cursorRow < offset) offset = cursorRow;
-    else if (cursorRow > offset + body - 1) offset = cursorRow - body + 1;
+  const targetLine = f.groupRows[cursor] ?? 0;
+  if (targetLine < offset) {
+    offset = targetLine;
+  } else if (targetLine >= offset + body) {
+    offset = Math.max(0, targetLine - body + 1);
   }
-  offset = Math.max(0, Math.min(offset, maxOffset));
+  const maxOffset = Math.max(0, f.body.length - body);
+  offset = Math.min(offset, maxOffset);
 
-  // 固定区（header）不参与滚动，滚动区（body）按 offset 切片
-  const rows = [...frame.header, ...frame.body.slice(offset, offset + body)];
-  const fullRows = (stdout.rows ?? 40) - 1;
+  const rows: string[] = [];
+  rows.push(...f.header);
+  const visibleBody = f.body.slice(offset, offset + body);
+  rows.push(...visibleBody);
+
+  const fullRows = height - 1;
   while (rows.length < fullRows) rows.push('');
 
   const parts: string[] = [];
   if (offset > 0) parts.push(`↑ 上方还有 ${offset} 行`);
   if (maxOffset - offset > 0) parts.push(`↓ 下方还有 ${maxOffset - offset} 行`);
+  const sortLabel = `s 排序(${sortBy === 'mem' ? '内存' : 'CPU'})`;
   parts.push(
     viewMode === 'tree'
-      ? '↑↓ 选择 · Enter 展开/收起 · / 查找 · a 全部展开/收起 · k 结束子树 · T 分组视图 · 空格 刷新 · q 退出'
-      : '↑↓ 选择 · Enter 展开/收起 · / 查找 · a 全部展开/收起 · k 结束组 · T 进程树 · 空格 刷新 · q 退出',
+      ? `↑↓ 选择 · Enter 展开/收起 · / 查找 · ${sortLabel} · a 全部展开/收起 · k 结束子树 · T 分组视图 · 空格 刷新 · q 退出`
+      : `↑↓ 选择 · Enter 展开/收起 · / 查找 · ${sortLabel} · a 全部展开/收起 · k 结束组 · T 进程树 · 空格 刷新 · q 退出`,
   );
   rows.push(statusLine(chalk.dim(truncate(parts.join('   '), width - 2)), width));
 
@@ -492,115 +524,39 @@ function toggleCurrent(): void {
 
 function toggleAll(): void {
   if (viewMode === 'tree') {
-    const parents = shownTreeRows().filter((r) => r.hasChildren);
-    if (parents.length === 0) return;
-    const allOpen = parents.every((r) => expandedNodes.has(r.node.proc.pid));
-    for (const r of parents) {
-      if (allOpen) expandedNodes.delete(r.node.proc.pid);
-      else expandedNodes.add(r.node.proc.pid);
+    const collect = (nodes: ProcessTreeNode[]): void => {
+      for (const n of nodes) {
+        if (n.children.length > 0) {
+          expandedNodes.add(n.proc.pid);
+          collect(n.children);
+        }
+      }
+    };
+    if (expandedNodes.size > 0) {
+      expandedNodes.clear();
+    } else {
+      collect(treeRoots);
     }
     draw();
     return;
   }
-  const multis = multiGroups();
-  if (multis.length === 0) return;
-  const allOpen = multis.every((g) => expandedNames.has(g.name));
-  for (const g of multis) {
-    if (allOpen) expandedNames.delete(g.name);
-    else expandedNames.add(g.name);
+  const multi = multiGroups();
+  if (multi.length === 0) return;
+  const anyOpen = multi.some((g) => expandedNames.has(g.name));
+  if (anyOpen) {
+    expandedNames.clear();
+  } else {
+    for (const g of multi) expandedNames.add(g.name);
   }
   draw();
 }
 
-/** T 键：分组视图 ↔ 树视图切换（光标与视口复位） */
+/** 切换分组视图 / 进程树视图 */
 function toggleView(): void {
-  viewMode = viewMode === 'group' ? 'tree' : 'group';
+  viewMode = viewMode === 'tree' ? 'group' : 'tree';
   cursor = 0;
   offset = 0;
   draw();
-}
-
-/** 树视图跳转：展开祖先链让目标行可见，再把光标移过去 */
-function treeJumpToPid(pid: number): boolean {
-  const roots = opts.top > 0 ? treeRoots.slice(0, opts.top) : treeRoots;
-  const byPid = collectNodes(roots);
-  const node = byPid.get(pid);
-  if (!node) return false;
-  let ppid = node.proc.ppid;
-  while (ppid !== undefined) {
-    const parent = byPid.get(ppid);
-    if (!parent) break;
-    expandedNodes.add(ppid);
-    ppid = parent.proc.ppid;
-  }
-  const rows = shownTreeRows();
-  const i = rows.findIndex((r) => r.node.proc.pid === pid);
-  if (i < 0) return false;
-  cursor = i;
-  draw();
-  return true;
-}
-
-/** 按当前关键词计算匹配（树：全树含折叠节点，按子树内存降序；组：可见组名） */
-function computeMatches(q: string): void {
-  if (viewMode === 'tree') {
-    const roots = opts.top > 0 ? treeRoots.slice(0, opts.top) : treeRoots;
-    matchPids = [...collectNodes(roots).values()]
-      .filter((n) => n.proc.name.toLowerCase().includes(q))
-      .sort((a, b) => b.subtreeBytes - a.subtreeBytes)
-      .map((n) => n.proc.pid);
-  } else {
-    matchGroups = shownGroups()
-      .map((g, i) => ({ g, i }))
-      .filter(({ g }) => g.name.toLowerCase().includes(q))
-      .map(({ i }) => i);
-  }
-}
-
-function matchTotal(): number {
-  return viewMode === 'tree' ? matchPids.length : matchGroups.length;
-}
-
-function jumpToMatch(idx: number): void {
-  if (viewMode === 'tree') {
-    const pid = matchPids[idx]!;
-    if (!treeJumpToPid(pid)) {
-      showNotice(chalk.yellow(`第 ${idx + 1} 个匹配当前不可达（可能已退出）`));
-      return;
-    }
-  } else {
-    cursor = matchGroups[idx]!;
-    draw();
-  }
-}
-
-/** Enter：结束输入并跳首个匹配 */
-function executeSearch(): void {
-  const raw = searchQuery.trim();
-  searchMode = false;
-  if (!raw) {
-    draw();
-    return;
-  }
-  computeMatches(raw.toLowerCase());
-  if (matchTotal() === 0) {
-    showNotice(chalk.yellow(`未找到匹配 "${raw}"`));
-    return;
-  }
-  matchIdx = 0;
-  jumpToMatch(0);
-  showNotice(`匹配 1/${matchTotal()}：${raw}（n 下一个）`);
-}
-
-/** n：循环下一个匹配 */
-function nextMatch(): void {
-  if (matchTotal() === 0) {
-    showNotice(chalk.dim('无活跃搜索，按 / 开始'));
-    return;
-  }
-  matchIdx = (matchIdx + 1) % matchTotal();
-  jumpToMatch(matchIdx);
-  showNotice(`匹配 ${matchIdx + 1}/${matchTotal()}（n 下一个）`);
 }
 
 function refreshNow(): void {
@@ -609,44 +565,124 @@ function refreshNow(): void {
 }
 
 function quit(): void {
-  if (!running) return;
   running = false;
   if (timer) clearTimeout(timer);
   if (cimTimer) clearTimeout(cimTimer);
   if (notice) clearTimeout(notice.timer);
   if (resultTimer) clearTimeout(resultTimer);
-  stdout.write('\x1b[?25h');
-  if (stdin.isTTY) {
-    try {
-      stdin.setRawMode(false);
-      stdin.pause();
-    } catch {
-      // 忽略：终端已恢复
-    }
-  }
-  // 离开备用屏缓冲区，恢复进入前的主屏内容（无需手工清屏，scrollback 完整保留）
-  stdout.write('\x1b[?1049l');
-  console.log('taskmon 已退出');
+  stdout.write('\x1b[?25h\x1b[?1049l');
+  releaseLock();
+  logger.info('taskmon 退出');
   process.exit(0);
 }
 
+/** 按当前关键词计算匹配（树：全树含折叠节点；组：可见组名） */
+function recomputeMatches(): void {
+  const q = searchQuery.trim().toLowerCase();
+  matchPids = [];
+  matchGroups = [];
+  matchIdx = 0;
+  if (!q) return;
+
+  if (viewMode === 'tree') {
+    const all = collectNodes(treeRoots);
+    const matched: ProcessTreeNode[] = [];
+    for (const n of all.values()) {
+      if (n.proc.name.toLowerCase().includes(q) || String(n.proc.pid).includes(q)) {
+        matched.push(n);
+      }
+    }
+    if (sortBy === 'cpu') {
+      matched.sort((a, b) => (b.subtreeCpuPct ?? 0) - (a.subtreeCpuPct ?? 0) || a.proc.pid - b.proc.pid);
+    } else {
+      matched.sort((a, b) => b.subtreeBytes - a.subtreeBytes || a.proc.pid - b.proc.pid);
+    }
+    matchPids = matched.map((n) => n.proc.pid);
+    return;
+  }
+
+  const sGroups = shownGroups();
+  for (let i = 0; i < sGroups.length; i++) {
+    const g = sGroups[i]!;
+    if (g.name.toLowerCase().includes(q) || g.processes.some((p) => String(p.pid).includes(q))) {
+      matchGroups.push(i);
+    }
+  }
+}
+
+/** 跳转到第 matchIdx 个匹配（树视图自动展开其祖先节点） */
+function jumpToMatch(index: number): void {
+  if (viewMode === 'tree') {
+    if (matchPids.length === 0) return;
+    const targetPid = matchPids[index % matchPids.length]!;
+    const all = collectNodes(treeRoots);
+    let cur = all.get(targetPid);
+    while (cur && cur.proc.ppid !== undefined && cur.proc.ppid > 0) {
+      expandedNodes.add(cur.proc.ppid);
+      cur = all.get(cur.proc.ppid);
+    }
+    const rows = shownTreeRows();
+    const rowIdx = rows.findIndex((r) => r.node.proc.pid === targetPid);
+    if (rowIdx >= 0) cursor = rowIdx;
+    showNotice(chalk.cyan(`匹配 ${index + 1}/${matchPids.length}（PID ${targetPid}，按 n 下一个）`));
+    draw();
+    return;
+  }
+
+  if (matchGroups.length === 0) return;
+  const gIdx = matchGroups[index % matchGroups.length]!;
+  cursor = gIdx;
+  const gName = shownGroups()[gIdx]?.name ?? '';
+  showNotice(chalk.cyan(`匹配 ${index + 1}/${matchGroups.length}（${gName}，按 n 下一个）`));
+  draw();
+}
+
+function executeSearch(): void {
+  searchMode = false;
+  recomputeMatches();
+  const total = viewMode === 'tree' ? matchPids.length : matchGroups.length;
+  if (total === 0) {
+    showNotice(chalk.yellow(`未找到匹配 "${searchQuery}" 的进程`));
+    draw();
+    return;
+  }
+  matchIdx = 0;
+  jumpToMatch(matchIdx);
+}
+
+function nextMatch(): void {
+  const total = viewMode === 'tree' ? matchPids.length : matchGroups.length;
+  if (total === 0) {
+    if (searchQuery) {
+      recomputeMatches();
+      if ((viewMode === 'tree' ? matchPids.length : matchGroups.length) > 0) {
+        jumpToMatch(0);
+        return;
+      }
+    }
+    showNotice(chalk.dim('当前没有搜索结果，按 / 输入关键词'));
+    return;
+  }
+  matchIdx = (matchIdx + 1) % total;
+  jumpToMatch(matchIdx);
+}
+
 function setupKeys(): void {
-  if (!stdin.isTTY) return;
+  if (!interactive) return;
   readline.emitKeypressEvents(stdin);
-  stdin.setRawMode(true);
-  stdin.resume();
-  stdin.on('keypress', (_str, key) => {
-    if (!key) return;
+  if (stdin.isTTY) stdin.setRawMode(true);
+  stdin.on('keypress', (_ch: string, key: readline.Key) => {
     if (key.ctrl && key.name === 'c') {
       quit();
       return;
     }
-    // kill 执行中：忽略一切按键（Ctrl+C 除外）
-    if (killState?.phase === 'running') return;
-    // kill 确认中：仅 y 执行，n/Esc/q 取消，其余忽略
-    if (killState?.phase === 'confirm') {
-      if (key.name === 'y') void executeKill();
-      else if (key.name === 'n' || key.name === 'escape' || key.name === 'q') cancelKill();
+    // kill 确认态：仅响应 y / n / Esc / Enter
+    if (killState && killState.phase === 'confirm') {
+      if (key.name === 'y') {
+        void executeKill();
+      } else if (key.name === 'n' || key.name === 'escape') {
+        cancelKill();
+      }
       return;
     }
     // kill 结果条：任意键先清除，再正常处理该键
@@ -691,6 +727,11 @@ function setupKeys(): void {
         break;
       case 't':
         toggleView();
+        break;
+      case 's':
+        sortBy = sortBy === 'mem' ? 'cpu' : 'mem';
+        applyTopology();
+        draw();
         break;
       case 'n':
         nextMatch();
@@ -745,13 +786,12 @@ async function guardSingleton(): Promise<void> {
   try {
     decision = await ensureSingleton();
   } catch (e) {
-    // 锁目录不可写等：降级为无单例保护，绝不因单例故障阻塞启动
     logger.warn({ err: e instanceof Error ? e.message : String(e) }, '单例锁检查异常，跳过单例保护');
     return;
   }
   if (decision.action === 'claim') {
     process.on('exit', () => releaseLock());
-    process.title = 'taskmon'; // WT 下便于辨识标签页（唤起只前置窗口，不保证切标签）
+    process.title = 'taskmon';
     return;
   }
   const { info } = decision;
@@ -785,24 +825,29 @@ async function main(): Promise<void> {
         logger.warn({ err: e instanceof Error ? e.message : String(e) }, '单帧模式 CIM 采集失败，拓扑降级');
       }
       const decorated = mergeTopology(raw, cim);
+      const onceCpu = readSysCpu();
       const frame = opts.tree
-        ? renderTreeFrame(buildTree(decorated), {
+        ? renderTreeFrame(buildTree(decorated, sortBy), {
             width: stdout.columns ?? 120,
             top: opts.top,
             timestamp: new Date(),
             intervalSec: opts.interval,
             totalProcs: decorated.length,
             sysMem: readSysMem(),
+            sysCpu: onceCpu,
+            sortBy,
             expandAll: opts.expand,
             topoAvailable: cim.size > 0,
           })
-        : renderFrame(groupProcesses(decorated), {
+        : renderFrame(groupProcesses(decorated, sortBy), {
             width: stdout.columns ?? 120,
             top: opts.top,
             timestamp: new Date(),
             intervalSec: opts.interval,
             totalProcs: decorated.length,
             sysMem: readSysMem(),
+            sysCpu: onceCpu,
+            sortBy,
             expandAll: opts.expand,
           });
       console.log(allLines(frame).join('\n'));
@@ -818,24 +863,19 @@ async function main(): Promise<void> {
 
   process.on('SIGINT', () => quit());
   stdout.on('resize', () => {
-    // resize 后整屏重画：清掉旧尺寸可能残留的行，避免表头/正文错位残留
     stdout.write('\x1b[2J\x1b[H');
     draw();
   });
   setupKeys();
-  // 进入备用屏缓冲区：TUI 画在独立屏幕上，不污染主屏 scrollback，
-  // resize 时终端也不会对主屏做 reflow，杜绝旧帧表头残留
   process.on('exit', () => {
-    // 兜底：异常退出/被强杀前尽力恢复终端（正常 quit 已恢复，重复写幂等）
     try {
       stdout.write('\x1b[?25h\x1b[?1049l');
     } catch {
-      // 忽略：终端已恢复
+      // 忽略
     }
   });
   stdout.write('\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l');
   await tick();
-  // CIM 拓扑副通道：与 tasklist 主刷新并行，overlap-skip 低节奏轮询
   void cimTick();
 }
 

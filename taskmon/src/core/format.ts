@@ -50,6 +50,12 @@ export function formatBytes(bytes: number): string {
   return `${v.toFixed(dec)} ${units[u]}`;
 }
 
+/** CPU 占用率显示：0~1 转换为百分比，保留 1 位小数，如 0.052 -> "5.2%"；undefined 返回 "" */
+export function formatCpu(pct: number | undefined): string {
+  if (pct === undefined || !Number.isFinite(pct) || pct < 0) return '';
+  return `${(pct * 100).toFixed(1)}%`;
+}
+
 /** 生成 `██░░` 内存条 */
 export function bar(filled: number, width: number): string {
   const f = Math.max(0, Math.min(width, Math.round(filled)));

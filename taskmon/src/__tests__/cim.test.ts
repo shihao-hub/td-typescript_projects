@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { indexByPid, parseCimJson, parseCreated } from '../core/cim.js';
+import { computeCpuPercentages, indexByPid, parseCimJson, parseCreated } from '../core/cim.js';
+import type { CimProc } from '../core/cim.js';
 
 describe('parseCreated', () => {
   it('epoch 毫秒数字直接通过', () => {
@@ -34,6 +35,13 @@ describe('parseCimJson', () => {
     expect(procs[1]).toEqual({ pid: 4, ppid: 0, name: 'System', created: null, cmd: null });
   });
 
+  it('解析含 cpu 字段的记录', () => {
+    const json = '[{"pid":123,"ppid":1,"name":"test.exe","created":null,"cmd":null,"cpu":5000000}]';
+    const procs = parseCimJson(json);
+    expect(procs).toHaveLength(1);
+    expect(procs[0]!.cpuTime).toBe(5000000);
+  });
+
   it('单对象（非数组）也能解析', () => {
     const procs = parseCimJson('{"pid":1,"ppid":0,"name":"a.exe","created":null,"cmd":null}');
     expect(procs).toHaveLength(1);
@@ -61,6 +69,34 @@ describe('parseCimJson', () => {
     expect(parseCimJson('')).toEqual([]);
     expect(parseCimJson('   ')).toEqual([]);
     expect(parseCimJson('not-json{{{')).toEqual([]);
+  });
+});
+
+describe('computeCpuPercentages', () => {
+  it('正确根据两次快照计算 CPU 占用率，PID 0 置 0', () => {
+    const prev = new Map<number, CimProc>([
+      [0, { pid: 0, ppid: 0, name: 'System Idle Process', created: null, cmd: null, cpuTime: 100000000 }],
+      [100, { pid: 100, ppid: 1, name: 'app.exe', created: null, cmd: null, cpuTime: 10000000 }],
+    ]);
+    const curr = new Map<number, CimProc>([
+      [0, { pid: 0, ppid: 0, name: 'System Idle Process', created: null, cmd: null, cpuTime: 130000000 }],
+      // 在 2 秒间隔（2000ms）、4 核系统下：总 slice = 2000 * 10,000 * 4 = 80,000,000 100ns 单位
+      // 增量 20,000,000 相当于 25% 占用
+      [100, { pid: 100, ppid: 1, name: 'app.exe', created: null, cmd: null, cpuTime: 30000000 }],
+    ]);
+
+    computeCpuPercentages(curr, 2000, prev, 0, 4);
+
+    expect(curr.get(0)!.cpuPct).toBe(0); // 空闲进程置 0
+    expect(curr.get(100)!.cpuPct).toBeCloseTo(0.25, 3);
+  });
+
+  it('无上一拍时置 0', () => {
+    const curr = new Map<number, CimProc>([
+      [100, { pid: 100, ppid: 1, name: 'app.exe', created: null, cmd: null, cpuTime: 30000000 }],
+    ]);
+    computeCpuPercentages(curr, 1000, undefined, undefined, 4);
+    expect(curr.get(100)!.cpuPct).toBe(0);
   });
 });
 

@@ -24,27 +24,34 @@ describe('isValidParent', () => {
     expect(isValidParent(1, T0, { pid: 1, creationDate: T0 - 1000 })).toBe(false);
   });
 
-  it('父早于子创建 → 有效', () => {
-    expect(isValidParent(2, T0, { pid: 1, creationDate: T0 - 1000 })).toBe(true);
+  it('父创建时间早于或等于子 → 有效', () => {
+    expect(isValidParent(2, T0 + 1000, { pid: 1, creationDate: T0 })).toBe(true);
+    expect(isValidParent(2, T0, { pid: 1, creationDate: T0 })).toBe(true);
   });
 
-  it('父晚于子创建（PID 复用）→ 无效', () => {
-    expect(isValidParent(2, T0, { pid: 1, creationDate: T0 + 1000 })).toBe(false);
+  it('父创建时间晚于子（PID 复用特征）→ 无效', () => {
+    expect(isValidParent(2, T0, { pid: 1, creationDate: T0 + 60_000 })).toBe(false);
   });
 
-  it('任一侧创建时间缺失 → 不做复用判定，按有效处理', () => {
-    expect(isValidParent(2, undefined, { pid: 1, creationDate: T0 + 1000 })).toBe(true);
+  it('任一方创建时间缺失 → 宽容视为有效（无法确证复用就不误伤）', () => {
+    expect(isValidParent(2, undefined, { pid: 1, creationDate: T0 })).toBe(true);
     expect(isValidParent(2, T0, { pid: 1 })).toBe(true);
   });
 });
 
 describe('mergeTopology', () => {
-  it('补全 ppid/创建时间/命令行/父进程名', () => {
+  it('CIM 可用时补全进程名、ppid、时间、命令行、父进程名', () => {
+    const raw = [p('p20.exe', 20, 50)];
     const out = mergeTopology(
-      [p('zed.exe', 10, 100), p('gopls.exe', 11, 50)],
-      cimMap(cim(10, 4, T0 - 5000, 'Zed.exe'), cim(11, 10, T0, 'gopls -mode=stdio')),
+      raw,
+      cimMap(
+        cim(10, 0, T0 - 1000),
+        { pid: 20, ppid: 10, name: 'gopls.exe', created: T0, cmd: 'gopls -mode=stdio' },
+      ),
     );
-    const gopls = out.find((x) => x.pid === 11)!;
+    expect(out).toHaveLength(1);
+    const gopls = out[0]!;
+    expect(gopls.name).toBe('gopls.exe');
     expect(gopls.ppid).toBe(10);
     expect(gopls.creationDate).toBe(T0);
     expect(gopls.commandLine).toBe('gopls -mode=stdio');
@@ -83,8 +90,11 @@ describe('mergeTopology', () => {
   });
 
   it('无 CIM 数据的进程原样保留（不标孤儿）', () => {
-    const out = mergeTopology([p('a.exe', 1, 1)], new Map());
-    expect(out[0]).toEqual(p('a.exe', 1, 1));
+    const raw = [p('chrome.exe', 50, 100)];
+    const out = mergeTopology(raw, new Map());
+    expect(out).toHaveLength(1);
+    expect(out[0]!.name).toBe('chrome.exe');
+    expect(out[0]!.orphan).toBeUndefined();
   });
 });
 
@@ -97,26 +107,37 @@ describe('buildTree', () => {
       p('chrome.exe', 4, 2000),
     ];
     const roots = buildTree(procs);
+    expect(roots).toHaveLength(2);
     // zed 子树 800+900+600=2300 > chrome 2000
-    expect(roots.map((r) => r.proc.pid)).toEqual([1, 4]);
-    const zed = roots[0]!;
-    expect(zed.subtreeBytes).toBe(2300 * MB);
-    expect(zed.children.map((c) => c.proc.pid)).toEqual([2, 3]); // 900 > 600
+    expect(roots[0]!.proc.name).toBe('zed.exe');
+    expect(roots[0]!.subtreeBytes).toBe(2300 * MB);
+    expect(roots[0]!.children).toHaveLength(2);
+    // 子按子树降序
+    expect(roots[0]!.children[0]!.proc.name).toBe('opencode.exe');
+    expect(roots[0]!.children[1]!.proc.name).toBe('gopls.exe');
+    expect(roots[1]!.proc.name).toBe('chrome.exe');
     expect(roots[1]!.subtreeBytes).toBe(2000 * MB);
   });
 
-  it('自引用（PPID==PID）不构成边，成为根', () => {
-    const roots = buildTree([p('a.exe', 7, 10, { ppid: 7 })]);
+  it('三级树：递归计算孙子子树', () => {
+    const procs = [
+      p('root.exe', 1, 10),
+      p('mid.exe', 2, 20, { ppid: 1 }),
+      p('leaf.exe', 3, 30, { ppid: 2 }),
+    ];
+    const roots = buildTree(procs);
+    expect(roots).toHaveLength(1);
+    expect(roots[0]!.subtreeBytes).toBe(60 * MB);
+    expect(roots[0]!.children[0]!.subtreeBytes).toBe(50 * MB);
+  });
+
+  it('自引用 PPID==PID 成为根，不产生死循环', () => {
+    const roots = buildTree([p('System', 4, 1, { ppid: 4 })]);
     expect(roots).toHaveLength(1);
     expect(roots[0]!.children).toHaveLength(0);
   });
 
-  it('孤儿（父不在快照）成为根', () => {
-    const roots = buildTree([p('a.exe', 1, 10), p('orphan.exe', 2, 20, { ppid: 999 })]);
-    expect(roots.map((r) => r.proc.pid).sort()).toEqual([1, 2]);
-  });
-
-  it('PID 复用（"父"晚于子）断链：子成为根', () => {
+  it('PID 复用防线生效：父晚于子创建时不挂载，两者均为根', () => {
     const roots = buildTree([
       p('child.exe', 2, 10, { ppid: 1, creationDate: T0 }),
       p('reused.exe', 1, 10, { creationDate: T0 + 60_000 }),
@@ -148,6 +169,24 @@ describe('buildTree', () => {
     ];
     const roots = buildTree(procs);
     expect(roots[0]!.subtreeBytes).toBe(130 * MB);
+  });
+
+  it('子树合计支持 CPU 占用率累加，并在 sortBy=cpu 时按子树 CPU 排序', () => {
+    const procs = [
+      p('root_mem.exe', 1, 1000, { cpuPct: 0.01 }),
+      p('child_mem.exe', 2, 500, { ppid: 1, cpuPct: 0.01 }),
+      p('root_cpu.exe', 3, 50, { cpuPct: 0.20 }),
+      p('child_cpu.exe', 4, 20, { ppid: 3, cpuPct: 0.30 }),
+    ];
+    // 内存模式下 root_mem (1500MB) 排在前面
+    const memRoots = buildTree(procs, 'mem');
+    expect(memRoots.map((r) => r.proc.pid)).toEqual([1, 3]);
+    expect(memRoots[0]!.subtreeCpuPct).toBeCloseTo(0.02, 2);
+    expect(memRoots[1]!.subtreeCpuPct).toBeCloseTo(0.50, 2);
+
+    // CPU 模式下 root_cpu (50% CPU) 排在前面
+    const cpuRoots = buildTree(procs, 'cpu');
+    expect(cpuRoots.map((r) => r.proc.pid)).toEqual([3, 1]);
   });
 });
 

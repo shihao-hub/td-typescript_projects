@@ -4,8 +4,8 @@ import type { ProcessInfo } from '../core/types.js';
 
 const MB = 1024 * 1024;
 
-function p(name: string, pid: number, mb: number): ProcessInfo {
-  return { name, pid, memBytes: mb * MB };
+function p(name: string, pid: number, mb: number, cpuPct?: number): ProcessInfo {
+  return { name, pid, memBytes: mb * MB, cpuPct };
 }
 
 describe('groupProcesses', () => {
@@ -37,6 +37,17 @@ describe('groupProcesses', () => {
     const a = groups[0]!;
     expect(a.processes.map((x) => x.pid)).toEqual([102, 103, 101]);
     expect(a.maxSingleBytes).toBe(30 * MB);
+  });
+
+  it('按 CPU 排序模式：组间按 totalCpuPct 降序，组内按单进程 cpuPct 降序', () => {
+    const groups = groupProcesses([
+      p('mem_hog.exe', 1, 1000, 0.01),
+      p('cpu_hog.exe', 2, 50, 0.40),
+      p('cpu_hog.exe', 3, 10, 0.10),
+    ], 'cpu');
+    expect(groups.map((g) => g.name)).toEqual(['cpu_hog.exe', 'mem_hog.exe']);
+    expect(groups[0]!.totalCpuPct).toBeCloseTo(0.50, 2);
+    expect(groups[0]!.processes.map((x) => x.pid)).toEqual([2, 3]);
   });
 
   it('空输入返回空数组', () => {

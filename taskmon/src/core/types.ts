@@ -14,12 +14,16 @@ export interface ProcessInfo {
   parentName?: string;
   /** 父已退出或 PPID 已被复用（指向无关进程）——典型遗留/泄漏进程信号 */
   orphan?: boolean;
+  /** CPU 占用率（0~1，占整机总算力比例） */
+  cpuPct?: number;
 }
 
 export interface ProcessGroup {
   name: string;
-  /** 组内按 memBytes 降序 */
+  /** 组内按 memBytes 或 cpuPct 降序 */
   processes: ProcessInfo[];
   totalBytes: number;
   maxSingleBytes: number;
+  /** 组内全部进程 CPU 占用率合计（0~1；尚未采样时为 undefined） */
+  totalCpuPct?: number;
 }

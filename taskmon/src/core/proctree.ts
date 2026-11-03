@@ -1,11 +1,12 @@
 import type { CimProc } from './cim.js';
 import type { ProcessInfo } from './types.js';
 
-/** 进程树节点：children 已按子树内存降序，subtreeBytes = 自身 + 全部后代 */
+/** 进程树节点：children 已按子树内存或 CPU 降序，subtreeBytes / subtreeCpuPct = 自身 + 全部后代 */
 export interface ProcessTreeNode {
   proc: ProcessInfo;
   children: ProcessTreeNode[];
   subtreeBytes: number;
+  subtreeCpuPct?: number;
 }
 
 /**
@@ -27,7 +28,7 @@ export function isValidParent(
 }
 
 /**
- * 用 CIM 拓扑补全 tasklist 进程：进程名 / ppid / 创建时间 / 命令行 / 父进程名 / 孤儿标记。
+ * 用 CIM 拓扑补全 tasklist 进程：进程名 / ppid / 创建时间 / 命令行 / 父进程名 / 孤儿标记 / CPU 占用。
  * - 无 CIM 数据的进程原样保留（树视图中作为无标记的根，组视图中不显示父列）
  * - orphan=true：曾有父但已不可达——父不在 CIM 快照中，或 PPID 已被复用；
  *   ppid<=0 与自引用（System Idle/System 等）视为"从未有父"，不标孤儿
@@ -52,21 +53,27 @@ export function mergeTopology(procs: ProcessInfo[], cim: Map<number, CimProc>): 
       commandLine: c.cmd ?? undefined,
       parentName: parentValid ? parent!.name : undefined,
       orphan: !noParent && !parentValid,
+      cpuPct: c.cpuPct ?? p.cpuPct,
     };
   });
 }
 
 /**
- * 构建进程森林（根 = 无有效父边的进程，按子树内存降序）。
+ * 构建进程森林（根 = 无有效父边的进程，按子树内存或 CPU 降序）。
  *
  * 防环：快照竞态可能出现 A↔B 互相引用之类的环——先从根 DFS 标记可达，
  * 未达节点（环成员及其后代）从父的 children 断链后提升为孤立根，
  * 保证后续求和/排序/展平的递归必然终止。
  */
-export function buildTree(procs: ProcessInfo[]): ProcessTreeNode[] {
+export function buildTree(procs: ProcessInfo[], sortBy: 'mem' | 'cpu' = 'mem'): ProcessTreeNode[] {
   const nodes = new Map<number, ProcessTreeNode>();
   for (const p of procs) {
-    nodes.set(p.pid, { proc: p, children: [], subtreeBytes: p.memBytes });
+    nodes.set(p.pid, {
+      proc: p,
+      children: [],
+      subtreeBytes: p.memBytes,
+      subtreeCpuPct: p.cpuPct,
+    });
   }
 
   const roots: ProcessTreeNode[] = [];
@@ -103,20 +110,36 @@ export function buildTree(procs: ProcessInfo[]): ProcessTreeNode[] {
     roots.push(node);
   }
 
-  // 子树合计 + 层内排序（子按子树内存降序；根同理）
-  const compute = (n: ProcessTreeNode): number => {
-    n.subtreeBytes = n.proc.memBytes + n.children.reduce((s, c) => s + compute(c), 0);
-    return n.subtreeBytes;
+  // 子树合计 + 层内排序（子按子树降序；根同理）
+  const compute = (n: ProcessTreeNode): void => {
+    let bytes = n.proc.memBytes;
+    const hasCpu = n.proc.cpuPct !== undefined || n.children.some((c) => c.subtreeCpuPct !== undefined);
+    let cpu = n.proc.cpuPct ?? 0;
+    for (const c of n.children) {
+      compute(c);
+      bytes += c.subtreeBytes;
+      cpu += c.subtreeCpuPct ?? 0;
+    }
+    n.subtreeBytes = bytes;
+    n.subtreeCpuPct = hasCpu ? cpu : undefined;
   };
   const sortTree = (n: ProcessTreeNode): void => {
-    n.children.sort((a, b) => b.subtreeBytes - a.subtreeBytes || a.proc.pid - b.proc.pid);
+    if (sortBy === 'cpu') {
+      n.children.sort((a, b) => (b.subtreeCpuPct ?? 0) - (a.subtreeCpuPct ?? 0) || b.subtreeBytes - a.subtreeBytes || a.proc.pid - b.proc.pid);
+    } else {
+      n.children.sort((a, b) => b.subtreeBytes - a.subtreeBytes || (b.subtreeCpuPct ?? 0) - (a.subtreeCpuPct ?? 0) || a.proc.pid - b.proc.pid);
+    }
     for (const c of n.children) sortTree(c);
   };
   for (const r of roots) {
     compute(r);
     sortTree(r);
   }
-  roots.sort((a, b) => b.subtreeBytes - a.subtreeBytes || a.proc.pid - b.proc.pid);
+  if (sortBy === 'cpu') {
+    roots.sort((a, b) => (b.subtreeCpuPct ?? 0) - (a.subtreeCpuPct ?? 0) || b.subtreeBytes - a.subtreeBytes || a.proc.pid - b.proc.pid);
+  } else {
+    roots.sort((a, b) => b.subtreeBytes - a.subtreeBytes || (b.subtreeCpuPct ?? 0) - (a.subtreeCpuPct ?? 0) || a.proc.pid - b.proc.pid);
+  }
   return roots;
 }
 

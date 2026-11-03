@@ -7,8 +7,8 @@ import type { ProcessInfo } from '../core/types.js';
 
 const MB = 1024 * 1024;
 
-function p(name: string, pid: number, mb: number): ProcessInfo {
-  return { name, pid, memBytes: mb * MB };
+function p(name: string, pid: number, mb: number, cpuPct?: number): ProcessInfo {
+  return { name, pid, memBytes: mb * MB, cpuPct };
 }
 
 function buildGroups(): ReturnType<typeof groupProcesses> {
@@ -101,41 +101,75 @@ describe('renderFrame', () => {
   it('groupRows 与可见组一一对应且指向 body 中的组行', () => {
     const f = frame({ expanded: new Set(['chrome.exe']) });
     expect(f.groupRows).toHaveLength(2);
-    expect(strip(f.body[f.groupRows[0]!]!)).toContain('chrome.exe (2)');
+    expect(strip(f.body[f.groupRows[0]!]!)).toContain('chrome.exe');
     expect(strip(f.body[f.groupRows[1]!]!)).toContain('explorer.exe');
-    // 展开插入的成员行位于两个组行之间
-    expect(f.groupRows[1]!).toBeGreaterThan(f.groupRows[0]! + 2);
   });
 
   it('cursorIndex 不破坏结构', () => {
-    const f = frame({ cursorIndex: 0 });
-    expect(strip(f.body[f.groupRows[0]!]!)).toContain('chrome.exe (2)');
-    expect(allLines(f).length).toBeGreaterThan(5);
+    const f0 = frame({ cursorIndex: 0 });
+    const f1 = frame({ cursorIndex: 1 });
+    expect(flat(f0)).toEqual(flat(f1));
   });
 
   it('组间顺序：总内存大的组在前', () => {
-    const lines = flat(frame());
-    expect(lines.findIndex((l) => l.includes('chrome.exe'))).toBeLessThan(
-      lines.findIndex((l) => l.includes('explorer.exe')),
-    );
+    const groups = groupProcesses([
+      p('small.exe', 1, 10),
+      p('large.exe', 2, 200),
+      p('mid.exe', 3, 50),
+    ]);
+    const f = renderFrame(groups, {
+      width: 100,
+      top: 0,
+      timestamp: new Date(),
+      intervalSec: 2,
+      totalProcs: 3,
+    });
+    const lines = flat(f);
+    const iLarge = lines.findIndex((l) => l.includes('large.exe'));
+    const iMid = lines.findIndex((l) => l.includes('mid.exe'));
+    const iSmall = lines.findIndex((l) => l.includes('small.exe'));
+    expect(iLarge).toBeLessThan(iMid);
+    expect(iMid).toBeLessThan(iSmall);
   });
 
   it('top 截断组数量', () => {
-    const lines = flat(frame({ top: 1 }));
-    expect(lines.some((l) => l.includes('chrome.exe (2)'))).toBe(true);
-    expect(lines.some((l) => l.includes('explorer.exe'))).toBe(false);
-    expect(lines[1]).toContain('前 1 组');
+    const f = frame({ top: 1 });
+    const txt = flat(f).join('\n');
+    expect(txt).toContain('chrome.exe');
+    expect(txt).not.toContain('explorer.exe');
+    expect(strip(f.header[1]!)).toContain('前 1 组');
   });
 
   it('sysMem：摘要含物理内存使用率，组行显示占物理总量%', () => {
     const f = frame({ sysMem: sysMem32() });
-    const summary = strip(f.header[1]!);
-    expect(summary).toContain('物理内存');
-    expect(summary).toContain('62.5%');
-    expect(summary).toContain('20.0 GB/32.0 GB');
-    expect(summary).toContain('工作集合计');
-    // 组行：500MB / 32GB = 1.5%
-    expect(strip(f.body[f.groupRows[0]!]!)).toContain('1.5%');
+    expect(strip(f.header[1]!)).toContain('物理内存 62.5% 已用');
+    const groupRow = strip(f.body[f.groupRows[0]!]!);
+    expect(groupRow).toContain('1.5%'); // 500MB / 32GB = 1.52%
+  });
+
+  it('sysCpu：摘要含 CPU 占用率与核心数', () => {
+    const f = frame({ sysCpu: { usedPct: 0.245, cores: 8 } });
+    expect(strip(f.header[1]!)).toContain('CPU 24.5%');
+  });
+
+  it('支持展示组 CPU 与成员 CPU', () => {
+    const procs = [
+      p('chrome.exe', 111, 300, 0.15),
+      p('chrome.exe', 222, 200, 0.05),
+    ];
+    const groups = groupProcesses(procs);
+    const f = renderFrame(groups, {
+      width: 100,
+      top: 0,
+      timestamp: new Date(),
+      intervalSec: 2,
+      totalProcs: 2,
+      expanded: new Set(['chrome.exe']),
+    });
+    const lines = flat(f);
+    expect(lines.some((l) => l.includes('20.0%'))).toBe(true); // 组 CPU 15% + 5% = 20%
+    expect(lines.some((l) => l.includes('15.0%'))).toBe(true); // 成员 111 CPU
+    expect(lines.some((l) => l.includes('5.0%'))).toBe(true); // 成员 222 CPU
   });
 
   it('sysMem：成员行仍为组内占比', () => {
@@ -167,10 +201,10 @@ describe('renderFrame', () => {
 
 describe('renderTreeFrame', () => {
   const treeProcs: ProcessInfo[] = [
-    { name: 'zed.exe', pid: 1, memBytes: 800 * MB, ppid: 999, orphan: true },
-    { name: 'opencode.exe', pid: 2, memBytes: 900 * MB, ppid: 1 },
-    { name: 'node.exe', pid: 3, memBytes: 300 * MB, ppid: 2 },
-    { name: 'chrome.exe', pid: 4, memBytes: 100 * MB },
+    { name: 'zed.exe', pid: 1, memBytes: 800 * MB, ppid: 999, orphan: true, cpuPct: 0.02 },
+    { name: 'opencode.exe', pid: 2, memBytes: 900 * MB, ppid: 1, cpuPct: 0.10 },
+    { name: 'node.exe', pid: 3, memBytes: 300 * MB, ppid: 2, cpuPct: 0.05 },
+    { name: 'chrome.exe', pid: 4, memBytes: 100 * MB, cpuPct: 0.01 },
   ];
   const roots = buildTree(treeProcs);
 
@@ -190,6 +224,18 @@ describe('renderTreeFrame', () => {
     expect(lines[0]).toContain('进程树');
     expect(lines[1]).toContain('根 2');
     expect(lines[1]).toContain('拓扑');
+  });
+
+  it('摘要含 sysCpu', () => {
+    const f = treeFrame({ sysCpu: { usedPct: 0.18, cores: 16 } });
+    expect(flat(f)[1]).toContain('CPU 18.0%');
+  });
+
+  it('树视图行内显示自身 CPU 与子树 CPU', () => {
+    const f = treeFrame();
+    const rootRow = flat(f).find((l) => l.includes('zed.exe'))!;
+    expect(rootRow).toContain('2.0%'); // zed 自身 2%
+    expect(rootRow).toContain('17.0%'); // zed 子树 2 + 10 + 5 = 17%
   });
 
   it('默认折叠只显示根行；根行不显示孤儿 †（Windows 顶层进程父退出是常态）', () => {

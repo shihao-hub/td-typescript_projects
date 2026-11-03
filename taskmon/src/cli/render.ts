@@ -1,9 +1,10 @@
 import chalk from 'chalk';
 import type { ProcessGroup } from '../core/types.js';
 import type { SysMem } from '../core/sysmem.js';
+import type { SysCpu } from '../core/syscpu.js';
 import type { ProcessTreeNode } from '../core/proctree.js';
 import { flattenTree } from '../core/proctree.js';
-import { bar, displayWidth, formatBytes, padEnd, padStart, truncate } from '../core/format.js';
+import { displayWidth, formatBytes, formatCpu, padEnd, padStart, truncate } from '../core/format.js';
 
 export interface RenderOptions {
   width: number;
@@ -14,6 +15,10 @@ export interface RenderOptions {
   totalProcs: number;
   /** 物理内存读数：驱动摘要行与组行「占比」（占物理总量） */
   sysMem?: SysMem;
+  /** 系统 CPU 读数：驱动摘要行 */
+  sysCpu?: SysCpu;
+  /** 排序依据：mem（默认）或 cpu */
+  sortBy?: 'mem' | 'cpu';
   /** 已展开的组名集合（多实例组默认折叠） */
   expanded?: ReadonlySet<string>;
   /** 无视 expanded 集合，直接展开全部 */
@@ -44,6 +49,15 @@ function memTier(bytes: number): Tier {
   return 'green';
 }
 
+function cpuCell(pct: number | undefined, width: number): string {
+  if (pct === undefined) return ' '.repeat(width);
+  const text = padStart(formatCpu(pct), width);
+  if (pct <= 0.0001) return chalk.dim(text);
+  if (pct >= 0.2) return chalk.red.bold(text);
+  if (pct >= 0.05) return chalk.yellow(text);
+  return chalk.green(text);
+}
+
 function fmtDateTime(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
@@ -51,6 +65,8 @@ function fmtDateTime(d: Date): string {
 
 const RANK_W = 3;
 const PID_W = 6;
+const CPU_W = 6;
+const SUB_CPU_W = 7;
 const MEM_W = 10;
 const PCT_W = 7;
 const GAP = '  ';
@@ -67,10 +83,11 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Fra
 
   const totalMem = allGroups.reduce((s, g) => s + g.totalBytes, 0);
   const maxTotal = groups[0]?.totalBytes ?? 0;
+  const maxCpu = groups.reduce((m, g) => Math.max(m, g.totalCpuPct ?? 0), 0);
 
   // 标题 + 时间（右侧留 2 列余量：部分字体把 · 等歧义宽度字符按 2 渲染，恰好占满会换行截尾）
   const time = fmtDateTime(opts.timestamp);
-  const title = 'taskmon · 内存监控';
+  const title = 'taskmon · 进程监控';
   header.push(chalk.bold.cyan(padEnd(title, width - displayWidth(time) - 2)) + chalk.dim(time));
 
   // 摘要
@@ -79,6 +96,13 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Fra
     `进程 ${chalk.bold(String(opts.totalProcs))}`,
     `分组 ${chalk.bold(String(allGroups.length))}`,
   ];
+  if (opts.sysCpu) {
+    const cpuPct = opts.sysCpu.usedPct;
+    const cpuStr = `${(cpuPct * 100).toFixed(1)}%`;
+    const cpuColored =
+      cpuPct >= 0.8 ? chalk.red.bold(cpuStr) : cpuPct >= 0.5 ? chalk.yellow.bold(cpuStr) : chalk.bold.cyan(cpuStr);
+    statsParts.push(`CPU ${cpuColored}`);
+  }
   if (opts.sysMem) {
     statsParts.push(
       `物理内存 ${chalk.bold(`${(opts.sysMem.usedPct * 100).toFixed(1)}%`)} 已用` +
@@ -86,6 +110,7 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Fra
     );
   }
   statsParts.push(`工作集合计 ${chalk.bold(formatBytes(totalMem))}`, `刷新 ${opts.intervalSec}s`);
+  if (opts.sortBy === 'cpu') statsParts.push(chalk.cyan('按 CPU 排序'));
   if (opts.top > 0) statsParts.push(chalk.dim(`前 ${groups.length} 组`));
   // 截断到终端宽度：摘要行超宽会回绕，把整帧顶进 scrollback 造成旧表头残留
   header.push(truncate(statsParts.join(sep), width));
@@ -104,13 +129,13 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Fra
     Math.min(40, ...groups.map((g) => displayWidth(g.name) + (g.processes.length > 1 ? ` (${g.processes.length})`.length : 0))),
   );
   const nameColW = nameW + IND_W;
-  const barW = Math.max(8, Math.min(40, width - (RANK_W + PID_W + MEM_W + PCT_W + GAP.length * 5 + nameColW)));
+  const barW = Math.max(8, Math.min(40, width - (RANK_W + PID_W + CPU_W + MEM_W + PCT_W + GAP.length * 6 + nameColW)));
 
   // 列头（固定区末行）
   header.push(
     chalk.bold(
       padStart('#', RANK_W) + GAP + padEnd('  进程 / 组', nameColW) + GAP + padStart('PID', PID_W) + GAP +
-        padStart('内存', MEM_W) + GAP + padStart('占比', PCT_W) + GAP + padEnd('分布', barW),
+        padStart('CPU', CPU_W) + GAP + padStart('内存', MEM_W) + GAP + padStart('占比', PCT_W) + GAP + padEnd('分布', barW),
     ),
   );
 
@@ -118,40 +143,49 @@ export function renderFrame(allGroups: ProcessGroup[], opts: RenderOptions): Fra
     const g = groups[i]!;
     const multi = g.processes.length > 1;
     const isOpen = opts.expandAll === true || opts.expanded?.has(g.name) === true;
-    const tier = memTier(g.totalBytes);
+    const tier = opts.sortBy === 'cpu'
+      ? ((g.totalCpuPct ?? 0) >= 0.2 ? 'red' : (g.totalCpuPct ?? 0) >= 0.05 ? 'yellow' : 'green')
+      : memTier(g.totalBytes);
     const label = multi ? `${g.name} (${g.processes.length})` : g.name;
     const ind = multi ? (isOpen ? '▾ ' : '▸ ') : '  ';
     const nameCell = padEnd(ind + truncate(label, nameW), nameColW);
 
-    // 组行：排名 + 名称(×N + 展开指示) + [单例时 PID] + 总内存 + 占物理总量% + 条形图
-    const ratio = maxTotal > 0 ? g.totalBytes / maxTotal : 0;
+    // 组行：排名 + 名称(×N + 展开指示) + [单例时 PID] + CPU + 总内存 + 占物理总量% + 条形图
+    const ratio = opts.sortBy === 'cpu'
+      ? (maxCpu > 0 ? (g.totalCpuPct ?? 0) / maxCpu : 0)
+      : (maxTotal > 0 ? g.totalBytes / maxTotal : 0);
     const filled = Math.round(Math.max(0, Math.min(1, ratio)) * barW);
     const barCell =
       (filled > 0 ? chalk[tier]('█'.repeat(filled)) : '') + chalk.dim('░'.repeat(Math.max(0, barW - filled)));
     const pctCell =
       opts.sysMem && opts.sysMem.total > 0
-        ? chalk[tier](padStart(`${((g.totalBytes / opts.sysMem.total) * 100).toFixed(1)}%`, PCT_W))
+        ? chalk[memTier(g.totalBytes)](padStart(`${((g.totalBytes / opts.sysMem.total) * 100).toFixed(1)}%`, PCT_W))
         : ' '.repeat(PCT_W);
+
+    const groupCpu = cpuCell(g.totalCpuPct, CPU_W);
 
     // 行首文本单元格（选中行整体反色；条形图不参与反色，否则嵌套 ANSI 复位码会把彩色块渲成黑块）
     const head =
       chalk.dim(padStart(String(i + 1), RANK_W)) + GAP +
       (multi ? chalk.bold(nameCell) : nameCell) + GAP +
       (multi ? ' '.repeat(PID_W) : chalk.dim(padStart(String(g.processes[0]!.pid), PID_W))) + GAP +
-      chalk.bold(chalk[tier](padStart(formatBytes(g.totalBytes), MEM_W))) + GAP +
+      groupCpu + GAP +
+      chalk.bold(chalk[memTier(g.totalBytes)](padStart(formatBytes(g.totalBytes), MEM_W))) + GAP +
       pctCell;
     body.push((opts.cursorIndex === i ? chalk.inverse(head) : head) + GAP + barCell);
     groupRows.push(body.length - 1);
 
-    // 组内成员行（仅展开时）：PID + 单进程内存 + 组内占比 + [拓扑：↖父进程 / †孤儿 + 命令行截断]
+    // 组内成员行（仅展开时）：PID + CPU + 单进程内存 + 组内占比 + [拓扑：↖父进程 / †孤儿 + 命令行截断]
     if (multi && isOpen) {
-      const usedW = RANK_W + GAP.length + nameColW + GAP.length + PID_W + GAP.length + MEM_W + GAP.length + PCT_W + GAP.length;
+      const usedW = RANK_W + GAP.length + nameColW + GAP.length + PID_W + GAP.length + CPU_W + GAP.length + MEM_W + GAP.length + PCT_W + GAP.length;
       const freeW = Math.max(0, width - usedW);
       for (const p of g.processes) {
         const pct = g.totalBytes > 0 ? (p.memBytes / g.totalBytes) * 100 : 0;
+        const memberCpu = cpuCell(p.cpuPct, CPU_W);
         const base =
           ' '.repeat(RANK_W) + GAP + ' '.repeat(nameColW) + GAP +
           chalk.dim(padStart(String(p.pid), PID_W)) + GAP +
+          memberCpu + GAP +
           padStart(formatBytes(p.memBytes), MEM_W) + GAP +
           chalk.dim(padStart(`${pct.toFixed(1)}%`, PCT_W));
         // 拓扑信息（CIM 可用才有）：孤儿 † / 父进程 ↖，命令行压平空白后截断填满剩余宽度
@@ -188,6 +222,8 @@ export interface TreeRenderOptions {
   intervalSec: number;
   totalProcs: number;
   sysMem?: SysMem;
+  sysCpu?: SysCpu;
+  sortBy?: 'mem' | 'cpu';
   /** 已展开的节点 PID 集合 */
   expanded?: ReadonlySet<number>;
   /** 无视 expanded 集合，直接展开全部 */
@@ -212,8 +248,8 @@ function collectParentPids(roots: ProcessTreeNode[], out: Set<number> = new Set(
 }
 
 /**
- * 渲染进程树整帧（纯函数）：根按子树内存降序、子按子树内存降序；
- * 缩进分支符号 ├─/└─，孤儿标 †；行内显示 PID + 自身内存 + 子树合计 + 占物理总量%。
+ * 渲染进程树整帧（纯函数）：根按子树降序、子按子树降序；
+ * 缩进分支符号 ├─/└─，孤儿标 †；行内显示 PID + 自身CPU + 子树CPU + 自身内存 + 子树合计 + 占物理总量%。
  * groupRows = 全部可见行（每行都可选中和 k 结束子树）。
  */
 export function renderTreeFrame(allRoots: ProcessTreeNode[], opts: TreeRenderOptions): Frame {
@@ -228,6 +264,7 @@ export function renderTreeFrame(allRoots: ProcessTreeNode[], opts: TreeRenderOpt
 
   const totalMem = allRoots.reduce((s, r) => s + r.subtreeBytes, 0);
   const maxSub = rows[0]?.node.subtreeBytes ?? 0;
+  const maxSubCpu = rows.reduce((m, r) => Math.max(m, r.node.subtreeCpuPct ?? 0), 0);
 
   const time = fmtDateTime(opts.timestamp);
   const title = 'taskmon · 进程树';
@@ -238,6 +275,13 @@ export function renderTreeFrame(allRoots: ProcessTreeNode[], opts: TreeRenderOpt
     `进程 ${chalk.bold(String(opts.totalProcs))}`,
     `根 ${chalk.bold(String(allRoots.length))}`,
   ];
+  if (opts.sysCpu) {
+    const cpuPct = opts.sysCpu.usedPct;
+    const cpuStr = `${(cpuPct * 100).toFixed(1)}%`;
+    const cpuColored =
+      cpuPct >= 0.8 ? chalk.red.bold(cpuStr) : cpuPct >= 0.5 ? chalk.yellow.bold(cpuStr) : chalk.bold.cyan(cpuStr);
+    statsParts.push(`CPU ${cpuColored}`);
+  }
   if (opts.sysMem) {
     statsParts.push(
       `物理内存 ${chalk.bold(`${(opts.sysMem.usedPct * 100).toFixed(1)}%`)} 已用` +
@@ -245,6 +289,7 @@ export function renderTreeFrame(allRoots: ProcessTreeNode[], opts: TreeRenderOpt
     );
   }
   statsParts.push(`子树合计 ${chalk.bold(formatBytes(totalMem))}`, `刷新 ${opts.intervalSec}s`);
+  if (opts.sortBy === 'cpu') statsParts.push(chalk.cyan('按 CPU 排序'));
   if (opts.top > 0) statsParts.push(chalk.dim(`前 ${roots.length} 根`));
   statsParts.push(
     opts.topoAvailable
@@ -258,6 +303,7 @@ export function renderTreeFrame(allRoots: ProcessTreeNode[], opts: TreeRenderOpt
     body.push(chalk.yellow('未捕获到任何进程'));
     return { header, body, groupRows };
   }
+
   if (!opts.topoAvailable) {
     body.push(chalk.yellow('拓扑数据不可用：无法展示父子关系，全部进程显示为独立根（tasklist 主刷新不受影响）'));
   }
@@ -270,21 +316,20 @@ export function renderTreeFrame(allRoots: ProcessTreeNode[], opts: TreeRenderOpt
     const n = r.node;
     const ind = r.hasChildren ? (r.expanded ? '▾ ' : '▸ ') : '';
     const cnt = n.children.length > 0 ? ` (${n.children.length})` : '';
-    // 根 = 无有效父，树视图不再标 †（Windows 顶层进程父退出是常态，标了全是噪音）；
-    // 孤儿/父进程信息保留在分组视图的成员行
     return `${ind}${n.proc.name}${cnt}`;
   });
   const treeW = Math.max(
-    24,
-    Math.min(48, ...rows.map((_, i) => displayWidth(prefixes[i]! + labels[i]!))),
+    20,
+    Math.min(40, ...rows.map((_, i) => displayWidth(prefixes[i]! + labels[i]!))),
   );
 
-  const SUB_W = 10;
-  const barW = Math.max(8, Math.min(40, width - (RANK_W + PID_W + MEM_W + SUB_W + PCT_W + GAP.length * 6 + treeW)));
+  const SUB_W = 9;
+  const barW = Math.max(8, Math.min(40, width - (RANK_W + PID_W + CPU_W + SUB_CPU_W + MEM_W + SUB_W + PCT_W + GAP.length * 8 + treeW)));
 
   header.push(
     chalk.bold(
       padStart('#', RANK_W) + GAP + padEnd('  进程树', treeW) + GAP + padStart('PID', PID_W) + GAP +
+        padStart('CPU', CPU_W) + GAP + padStart('子树CPU', SUB_CPU_W) + GAP +
         padStart('自身', MEM_W) + GAP + padStart('子树', SUB_W) + GAP + padStart('占比', PCT_W) + GAP +
         padEnd('分布', barW),
     ),
@@ -293,23 +338,32 @@ export function renderTreeFrame(allRoots: ProcessTreeNode[], opts: TreeRenderOpt
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]!;
     const n = r.node;
-    const tier = memTier(n.subtreeBytes);
-    const ratio = maxSub > 0 ? n.subtreeBytes / maxSub : 0;
+    const tier = opts.sortBy === 'cpu'
+      ? ((n.subtreeCpuPct ?? 0) >= 0.2 ? 'red' : (n.subtreeCpuPct ?? 0) >= 0.05 ? 'yellow' : 'green')
+      : memTier(n.subtreeBytes);
+    const ratio = opts.sortBy === 'cpu'
+      ? (maxSubCpu > 0 ? (n.subtreeCpuPct ?? 0) / maxSubCpu : 0)
+      : (maxSub > 0 ? n.subtreeBytes / maxSub : 0);
     const filled = Math.round(Math.max(0, Math.min(1, ratio)) * barW);
     const barCell =
       (filled > 0 ? chalk[tier]('█'.repeat(filled)) : '') + chalk.dim('░'.repeat(Math.max(0, barW - filled)));
     const pctCell =
       opts.sysMem && opts.sysMem.total > 0
-        ? chalk[tier](padStart(`${((n.subtreeBytes / opts.sysMem.total) * 100).toFixed(1)}%`, PCT_W))
+        ? chalk[memTier(n.subtreeBytes)](padStart(`${((n.subtreeBytes / opts.sysMem.total) * 100).toFixed(1)}%`, PCT_W))
         : ' '.repeat(PCT_W);
     const treeCell = padEnd(truncate(prefixes[i]! + labels[i]!, treeW), treeW);
+
+    const ownCpu = cpuCell(n.proc.cpuPct, CPU_W);
+    const subCpu = cpuCell(n.subtreeCpuPct, SUB_CPU_W);
 
     const head =
       chalk.dim(padStart(String(i + 1), RANK_W)) + GAP +
       treeCell + GAP +
       chalk.dim(padStart(String(n.proc.pid), PID_W)) + GAP +
+      ownCpu + GAP +
+      subCpu + GAP +
       padStart(formatBytes(n.proc.memBytes), MEM_W) + GAP +
-      chalk[tier](padStart(formatBytes(n.subtreeBytes), SUB_W)) + GAP +
+      chalk[memTier(n.subtreeBytes)](padStart(formatBytes(n.subtreeBytes), SUB_W)) + GAP +
       pctCell;
     body.push((opts.cursorIndex === i ? chalk.inverse(head) : head) + GAP + barCell);
     groupRows.push(body.length - 1);
