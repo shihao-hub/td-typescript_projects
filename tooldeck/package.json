@@ -22,7 +22,7 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@rjsf/core": "^6.10.0",
     "@rjsf/utils": "^6.10.0",
     "@rjsf/validator-cfworker": "^6.10.0"
