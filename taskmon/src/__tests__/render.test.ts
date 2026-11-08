@@ -147,12 +147,19 @@ describe('renderFrame', () => {
     expect(groupRow).toContain('1.5%'); // 500MB / 32GB = 1.52%
   });
 
-  it('sysCpu：摘要含 CPU 占用率与核心数', () => {
+  it('默认 showCpu 为 false：摘要不含 CPU，列头不含 CPU 列', () => {
     const f = frame({ sysCpu: { usedPct: 0.245, cores: 8 } });
-    expect(strip(f.header[1]!)).toContain('CPU 24.5%');
+    expect(strip(f.header[1]!)).not.toContain('CPU');
+    expect(strip(f.header[3]!)).not.toContain('CPU');
   });
 
-  it('支持展示组 CPU 与成员 CPU', () => {
+  it('sysCpu：showCpu 为 true 时摘要含 CPU 占用率与列头包含 CPU 列', () => {
+    const f = frame({ sysCpu: { usedPct: 0.245, cores: 8 }, showCpu: true });
+    expect(strip(f.header[1]!)).toContain('CPU 24.5%');
+    expect(strip(f.header[3]!)).toContain('CPU');
+  });
+
+  it('支持展示组 CPU 与成员 CPU（showCpu 为 true）', () => {
     const procs = [
       p('chrome.exe', 111, 300, 0.15),
       p('chrome.exe', 222, 200, 0.05),
@@ -164,6 +171,7 @@ describe('renderFrame', () => {
       timestamp: new Date(),
       intervalSec: 2,
       totalProcs: 2,
+      showCpu: true,
       expanded: new Set(['chrome.exe']),
     });
     const lines = flat(f);
@@ -226,13 +234,23 @@ describe('renderTreeFrame', () => {
     expect(lines[1]).toContain('拓扑');
   });
 
-  it('摘要含 sysCpu', () => {
+  it('默认树视图不显示 CPU 列与摘要', () => {
     const f = treeFrame({ sysCpu: { usedPct: 0.18, cores: 16 } });
+    expect(flat(f)[1]).not.toContain('CPU');
+    expect(strip(f.header[3]!)).not.toContain('CPU');
+    const rootRow = flat(f).find((l) => l.includes('zed.exe'))!;
+    expect(rootRow).not.toContain('2.0%');
+  });
+
+  it('showCpu 为 true 时摘要含 sysCpu', () => {
+    const f = treeFrame({ sysCpu: { usedPct: 0.18, cores: 16 }, showCpu: true });
     expect(flat(f)[1]).toContain('CPU 18.0%');
   });
 
-  it('树视图行内显示自身 CPU 与子树 CPU', () => {
-    const f = treeFrame();
+  it('showCpu 为 true 时树视图行内显示自身 CPU 与子树 CPU', () => {
+    const f = treeFrame({ showCpu: true });
+    expect(strip(f.header[3]!)).toContain('CPU');
+    expect(strip(f.header[3]!)).toContain('子树CPU');
     const rootRow = flat(f).find((l) => l.includes('zed.exe'))!;
     expect(rootRow).toContain('2.0%'); // zed 自身 2%
     expect(rootRow).toContain('17.0%'); // zed 子树 2 + 10 + 5 = 17%

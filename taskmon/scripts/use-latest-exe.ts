@@ -7,8 +7,7 @@
  * NNNN，同为 tag 后代时 .dirty 视为更新。若 taskmon.exe 正在运行则拒绝覆盖，
  * 提示用户先退出进程再重试。
  */
-import { spawnSync } from 'node:child_process';
-import { copyFileSync, readdirSync } from 'node:fs';
+import { copyFileSync, openSync, closeSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -54,11 +53,16 @@ if (versions.length > 1) {
   console.log(`release/ 共 ${versions.length} 个版本，最大：${best.file}`);
 }
 
-// ---------- 运行检测 ----------
+// ---------- 运行与占用检测 ----------
 const target = join(root, 'taskmon.exe');
-const t = spawnSync('tasklist', ['/FI', 'IMAGENAME eq taskmon.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8' });
-if (t.status === 0 && (t.stdout ?? '').toLowerCase().includes('taskmon.exe')) {
-  die('taskmon.exe 正在运行，无法覆盖：请先退出该进程（托盘退出，或任务管理器/taskkill /IM taskmon.exe /F）后重试');
+try {
+  const fd = openSync(target, 'r+');
+  closeSync(fd);
+} catch (e) {
+  const err = e as NodeJS.ErrnoException;
+  if (err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'EACCES') {
+    die('taskmon.exe 正在运行，无法覆盖：请先退出该进程（托盘退出，或任务管理器/taskkill /IM taskmon.exe /F）后重试');
+  }
 }
 
 // ---------- 覆盖 ----------

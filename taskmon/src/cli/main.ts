@@ -54,6 +54,7 @@ program
   .option('-i, --interval <seconds>', '刷新间隔（秒），最小 1', (v) => Math.max(1, Number(v) || 2), 2)
   .option('-t, --top <n>', '只显示资源最大的前 n 组（0 = 全部）', (v) => Math.max(0, Math.floor(Number(v) || 0)), 0)
   .option('-s, --sort <type>', '排序依据：mem（默认按内存）或 cpu（按 CPU 占用）', 'mem')
+  .option('--cpu', '显示 CPU 占用列与系统 CPU 摘要（默认仅展示内存，保持界面清爽）')
   .option('-e, --expand', '展开全部分组（默认全部折叠，交互中可用 Enter/a 控制）')
   .option('--tree', '进程树视图：按父子孙树展示（交互模式为初始视图，T 键随时切换）')
   .option('--once', '输出一帧快照后退出（调试 / 管道友好）')
@@ -65,6 +66,7 @@ const opts = program.opts<{
   interval: number;
   top: number;
   sort: string;
+  cpu: boolean;
   expand: boolean;
   tree: boolean;
   once: boolean;
@@ -77,6 +79,7 @@ let procs: ProcessInfo[] = [];
 let treeRoots: ReturnType<typeof buildTree> = [];
 let viewMode: 'group' | 'tree' = opts.tree ? 'tree' : 'group';
 let sortBy: 'mem' | 'cpu' = opts.sort?.toLowerCase() === 'cpu' ? 'cpu' : 'mem';
+let showCpu = Boolean(opts.cpu || opts.sort?.toLowerCase() === 'cpu');
 let totalProcs = 0;
 let lastDate = new Date();
 let sysMem = readSysMem();
@@ -259,6 +262,7 @@ function currentFrame(): Frame {
       sysMem,
       sysCpu,
       sortBy,
+      showCpu,
       expanded: expandedNodes,
       cursorIndex: interactive ? cursor : undefined,
       topoAvailable: cimMap.size > 0,
@@ -274,6 +278,7 @@ function currentFrame(): Frame {
     sysMem,
     sysCpu,
     sortBy,
+    showCpu,
     expanded: expandedNames,
     cursorIndex: interactive ? cursor : undefined,
   });
@@ -464,10 +469,11 @@ function draw(): void {
   if (offset > 0) parts.push(`↑ 上方还有 ${offset} 行`);
   if (maxOffset - offset > 0) parts.push(`↓ 下方还有 ${maxOffset - offset} 行`);
   const sortLabel = `s 排序(${sortBy === 'mem' ? '内存' : 'CPU'})`;
+  const cpuLabel = `c CPU(${showCpu ? '开' : '关'})`;
   parts.push(
     viewMode === 'tree'
-      ? `↑↓ 选择 · Enter 展开/收起 · / 查找 · ${sortLabel} · a 全部展开/收起 · k 结束子树 · T 分组视图 · 空格 刷新 · q 退出`
-      : `↑↓ 选择 · Enter 展开/收起 · / 查找 · ${sortLabel} · a 全部展开/收起 · k 结束组 · T 进程树 · 空格 刷新 · q 退出`,
+      ? `↑↓ 选择 · Enter 展开/收起 · / 查找 · ${sortLabel} · ${cpuLabel} · a 全部展开/收起 · k 结束子树 · T 分组视图 · 空格 刷新 · q 退出`
+      : `↑↓ 选择 · Enter 展开/收起 · / 查找 · ${sortLabel} · ${cpuLabel} · a 全部展开/收起 · k 结束组 · T 进程树 · 空格 刷新 · q 退出`,
   );
   rows.push(statusLine(chalk.dim(truncate(parts.join('   '), width - 2)), width));
 
@@ -728,8 +734,15 @@ function setupKeys(): void {
       case 't':
         toggleView();
         break;
+      case 'c':
+        showCpu = !showCpu;
+        draw();
+        break;
       case 's':
         sortBy = sortBy === 'mem' ? 'cpu' : 'mem';
+        if (sortBy === 'cpu') {
+          showCpu = true;
+        }
         applyTopology();
         draw();
         break;
@@ -836,6 +849,7 @@ async function main(): Promise<void> {
             sysMem: readSysMem(),
             sysCpu: onceCpu,
             sortBy,
+            showCpu,
             expandAll: opts.expand,
             topoAvailable: cim.size > 0,
           })
@@ -848,6 +862,7 @@ async function main(): Promise<void> {
             sysMem: readSysMem(),
             sysCpu: onceCpu,
             sortBy,
+            showCpu,
             expandAll: opts.expand,
           });
       console.log(allLines(frame).join('\n'));
